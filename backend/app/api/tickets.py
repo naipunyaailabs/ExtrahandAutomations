@@ -1,0 +1,87 @@
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import or_
+from sqlalchemy.orm import Session
+
+from ..database import get_db
+from ..models import CallAttempt, DispatchRun, Escalation, Event, FollowUp, Ticket
+from ..services.dispatch import DispatchError, cancel_dispatch, start_dispatch
+from ..services.ivr import ACTIVE_STATUSES
+from .serializers import call_out, escalation_out, event_out, followup_out, run_out, ticket_out
+
+router = APIRouter(prefix="/api/tickets", tags=["tickets"])
+
+
+@router.get("")
+def list_tickets(
+    dispatch_status: str | None = None,
+    status: str | None = None,
+    q: str | None = None,
+    order: str = "desc",
+    db: Session = Depends(get_db),
+):
+    query = db.query(Ticket)
+    if dispatch_status:
+        query = query.filter(Ticket.dispatch_status.in_(dispatch_status.split(",")))
+    if status:
+        query = query.filter(Ticket.status.in_(status.split(",")))
+    if q:
+        like = f"%{q}%"
+        query = query.filter(or_(Ticket.id.ilike(like), Ticket.title.ilike(like), Ticket.customer_name.ilike(like),
+                                 Ticket.customer_phone.ilike(like), Ticket.city.ilike(like),
+                                 Ticket.category.ilike(like), Ticket.assignee_name.ilike(like)))
+    if order == "asc":
+        tickets = query.order_by(Ticket.scheduled_at.is_(None), Ticket.scheduled_at.asc(), Ticket.created_at.asc()).all()
+    else:
+        tickets = query.order_by(Ticket.scheduled_at.desc().nullslast(), Ticket.created_at.desc()).all()
+    ids = [t.id for t in tickets]
+
+    active_calls = {a.ticket_id: a for a in db.query(CallAttempt).filter(
+        CallAttempt.ticket_id.in_(ids), CallAttempt.status.in_(ACTIVE_STATUSES))}
+    next_followups: dict[str, FollowUp] = {}
+    for f in db.query(FollowUp).filter(FollowUp.ticket_id.in_(ids), FollowUp.status == "scheduled").order_by(FollowUp.due_at):
+        next_followups.setdefault(f.ticket_id, f)
+    open_esc = {e.ticket_id for e in db.query(Escalation).filter(Escalation.ticket_id.in_(ids), Escalation.status != "resolved")}
+    runs = {}
+    for r in db.query(DispatchRun).filter(DispatchRun.ticket_id.in_(ids)).order_by(DispatchRun.id):
+        runs[r.ticket_id] = r
+
+    out = []
+    for t in tickets:
+        d = ticket_out(t)
+        call, fu, run = active_calls.get(t.id), next_followups.get(t.id), runs.get(t.id)
+        d["active_call"] = call_out(call) if call else None
+        d["next_followup"] = followup_out(fu) if fu else None
+        d["has_open_escalation"] = t.id in open_esc
+        d["last_run"] = {"status": run.status, "progress": f"{max(run.current_index + 1, 0)}/{len(run.candidates)}"} if run else None
+        out.append(d)
+    return out
+
+
+@router.get("/{ticket_id}")
+def get_ticket(ticket_id: str, db: Session = Depends(get_db)):
+    t = db.get(Ticket, ticket_id)
+    if not t:
+        raise HTTPException(404, "Ticket not found")
+    d = ticket_out(t)
+    d["raw"] = t.raw
+    d["runs"] = [run_out(r) for r in db.query(DispatchRun).filter_by(ticket_id=t.id).order_by(DispatchRun.id.desc())]
+    d["calls"] = [call_out(a) for a in db.query(CallAttempt).filter_by(ticket_id=t.id).order_by(CallAttempt.id.desc())]
+    d["followups"] = [followup_out(f) for f in db.query(FollowUp).filter_by(ticket_id=t.id).order_by(FollowUp.due_at)]
+    d["escalations"] = [escalation_out(e) for e in db.query(Escalation).filter_by(ticket_id=t.id).order_by(Escalation.id.desc())]
+    d["events"] = [event_out(e) for e in db.query(Event).filter_by(ticket_id=t.id).order_by(Event.id.desc()).limit(200)]
+    return d
+
+
+@router.post("/{ticket_id}/dispatch")
+def dispatch(ticket_id: str, db: Session = Depends(get_db)):
+    try:
+        run = start_dispatch(db, ticket_id, trigger="manual")
+    except DispatchError as e:
+        raise HTTPException(400, str(e)) from e
+    return run_out(run)
+
+
+@router.post("/{ticket_id}/dispatch/cancel")
+def cancel(ticket_id: str, db: Session = Depends(get_db)):
+    cancel_dispatch(db, ticket_id)
+    return {"ok": True}

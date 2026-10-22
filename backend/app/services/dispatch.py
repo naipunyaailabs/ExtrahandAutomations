@@ -1,0 +1,280 @@
+"""Calls eligible helpers one by one until one accepts, otherwise escalates."""
+
+import logging
+import math
+
+from sqlalchemy.orm import Session
+
+from ..config import get_settings
+from ..integrations.extrahand import CandidatesUnavailable, ExtraHandError, get_source
+from ..integrations.mapping import is_terminal, normalize_user
+from ..models import CallAttempt, DispatchRun, DispatchStatus, Escalation, Helper, Ticket, utcnow
+from ..telephony import TelephonyProvider, get_provider
+from .common import engine_lock, log_event, runtime_settings
+from .ivr import ACTIVE_STATUSES, dispatch_script
+
+log = logging.getLogger(__name__)
+
+
+class DispatchError(Exception):
+    pass
+
+
+def km_between(lat1, lng1, lat2, lng2) -> float | None:
+    if None in (lat1, lng1, lat2, lng2):
+        return None
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = p2 - p1, math.radians(lng2 - lng1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * 6371.0 * math.asin(math.sqrt(a))
+
+
+def _skill_matches(category: str | None, skills: list[str]) -> bool:
+    if not category or not skills:
+        return True  # nothing to compare - don't exclude
+    c = category.lower()
+    return any(s.lower() in c or c in s.lower() for s in skills)
+
+
+def upsert_helper(db: Session, rec: dict) -> Helper:
+    h = db.get(Helper, rec["id"])
+    if not h:
+        for obj in db.new:
+            if isinstance(obj, Helper) and obj.id == rec["id"]:
+                h = obj
+                break
+    h = h or Helper(id=rec["id"])
+    scalar_fields = (
+        "profile_id", "name", "phone", "alt_phone", "email",
+        "city", "state", "pincode", "address", "lat", "lng",
+        "status", "is_active", "is_verified", "can_accept_tasks", "work_shift_type",
+    )
+    for k in scalar_fields:
+        if rec.get(k) is not None:
+            setattr(h, k, rec[k])
+    if rec.get("skills") is not None:
+        h.skills = rec["skills"]
+    if rec.get("categories") is not None:
+        h.categories = rec["categories"]
+    if rec.get("work_areas") is not None:
+        h.work_areas = rec["work_areas"]
+    if rec.get("raw") is not None:
+        h.raw = rec["raw"]
+    db.add(h)
+    return h
+
+
+def find_candidates(db: Session, ticket: Ticket) -> tuple[list[dict], str]:
+    """Eligible helpers for the ticket's location and service, nearest first."""
+    rt = runtime_settings(db)
+    src = get_source()
+    try:
+        raw = src.get_candidates(ticket.id, ticket.lat, ticket.lng, rt.match_radius_km)
+        source, trusted = "matching_api", True
+    except CandidatesUnavailable as e:
+        log.info("Matching API unavailable (%s); using helper list", e)
+        raw = src.list_users(get_settings().extrahand_helper_role)
+        source, trusted = "helper_list", False
+
+    out: list[dict] = []
+    seen: set[str] = set()
+    for item in raw:
+        rec = normalize_user(item)
+        if not rec["id"] or rec["id"] == "None" or rec["id"] in seen:
+            continue
+        seen.add(rec["id"])
+        upsert_helper(db, rec)
+        if not rec["phone"]:
+            continue
+        dist = rec["distance_km"]
+        if dist is None:
+            dist = km_between(ticket.lat, ticket.lng, rec["lat"], rec["lng"])
+        if not trusted:
+            if not _skill_matches(ticket.category, rec["skills"]):
+                continue
+            if dist is not None and dist > rt.match_radius_km:
+                continue
+            if dist is None and ticket.city and rec["city"] and ticket.city.lower() != rec["city"].lower():
+                continue
+        out.append({
+            "helper_id": rec["id"], "profile_id": rec["profile_id"], "name": rec["name"], "phone": rec["phone"],
+            "skills": rec["skills"], "distance_km": round(dist, 2) if dist is not None else None,
+        })
+    out.sort(key=lambda c: (c["distance_km"] is None, c["distance_km"] or 0))
+    return out[: rt.max_helpers_per_ticket], source
+
+
+def active_run(db: Session, ticket_id: str) -> DispatchRun | None:
+    return db.query(DispatchRun).filter_by(ticket_id=ticket_id, status="running").first()
+
+
+def start_dispatch(db: Session, ticket_id: str, trigger: str = "manual") -> DispatchRun:
+    with engine_lock:
+        ticket = db.get(Ticket, ticket_id)
+        if not ticket:
+            raise DispatchError("Ticket not found")
+        if run := active_run(db, ticket_id):
+            return run
+        if ticket.dispatch_status == DispatchStatus.CLOSED or is_terminal(ticket.status):
+            raise DispatchError(f"Ticket is {ticket.status}")
+        if ticket.dispatch_status == DispatchStatus.ASSIGNED:
+            raise DispatchError("Ticket already has an assigned helper")
+
+        try:
+            candidates, source = find_candidates(db, ticket)
+        except ExtraHandError as e:
+            raise DispatchError(f"Could not load helpers: {e}") from e
+
+        if ticket.assignee_id:
+            # Re-dispatch after escalation (e.g. the helper cannot attend): skip that helper
+            from .followups import cancel_for_ticket
+
+            candidates = [c for c in candidates if c["helper_id"] != ticket.assignee_id]
+            log_event(db, ticket.id, "assignee_cleared",
+                      f"Previous helper {ticket.assignee_name or ticket.assignee_id} removed locally")
+            cancel_for_ticket(db, ticket.id)
+            if not ticket.assignment_local_only:
+                ticket.ignored_remote_assignee_id = ticket.assignee_id
+            for f in ("assignee_id", "assignee_profile_id", "assignee_name", "assignee_phone"):
+                setattr(ticket, f, None)
+            ticket.assignment_local_only = False
+
+        run = DispatchRun(ticket_id=ticket.id, candidates=candidates, candidate_source=source)
+        db.add(run)
+        ticket.dispatch_status = DispatchStatus.DISPATCHING
+        db.flush()
+        log_event(db, ticket.id, "dispatch_started",
+                  f"Dispatch started ({trigger}): {len(candidates)} eligible helper(s) from {source.replace('_', ' ')}")
+        if not candidates:
+            _close_run(db, run, "escalated", "No eligible helpers for this location/service")
+            escalate(db, ticket, "no_eligible_helpers",
+                     f"No helpers with a phone number matched {ticket.category or 'the service'} "
+                     f"near {ticket.city or ticket.address or 'the task location'}.")
+        else:
+            _call_next(db, run)
+        db.commit()
+        return run
+
+
+def _close_run(db: Session, run: DispatchRun, status: str, reason: str) -> None:
+    run.status = status
+    run.reason = reason
+    run.finished_at = utcnow()
+
+
+def _call_next(db: Session, run: DispatchRun) -> None:
+    ticket = db.get(Ticket, run.ticket_id)
+    provider, provider_error = get_provider_safe()
+    while True:
+        run.current_index += 1
+        if run.current_index >= len(run.candidates):
+            _close_run(db, run, "escalated", "No helper accepted after all attempts")
+            summary = ", ".join(
+                f"{a.helper_name or a.phone}: {(a.outcome or '?').replace('_', ' ')}"
+                for a in db.query(CallAttempt).filter_by(run_id=run.id).order_by(CallAttempt.id)
+            )
+            escalate(db, ticket, "no_helper_accepted",
+                     f"Called {len(run.candidates)} helper(s), none accepted. {summary}")
+            return
+        c = run.candidates[run.current_index]
+        attempt = CallAttempt(
+            ticket_id=ticket.id, purpose="dispatch", run_id=run.id, helper_id=c["helper_id"],
+            helper_name=c["name"], phone=c["phone"], provider=provider.name if provider else "none",
+            script=dispatch_script(ticket, c["name"]),
+        )
+        db.add(attempt)
+        db.flush()
+        try:
+            if provider is None:
+                raise RuntimeError(provider_error)
+            attempt.provider_call_id = provider.place_call(attempt)
+            attempt.status = "ringing"
+            log_event(db, ticket.id, "call_placed",
+                      f"Calling helper {run.current_index + 1}/{len(run.candidates)}: {c['name']} ({c['phone']})")
+            return
+        except Exception as e:  # noqa: BLE001 - any provider failure moves on to the next helper
+            attempt.status, attempt.outcome, attempt.error, attempt.ended_at = "ended", "failed", str(e)[:500], utcnow()
+            log_event(db, ticket.id, "call_failed", f"Could not call {c['name']}: {e}")
+
+
+def get_provider_safe() -> tuple[TelephonyProvider | None, str | None]:
+    try:
+        return get_provider(), None
+    except Exception as e:  # noqa: BLE001 - misconfiguration is reported per call
+        return None, str(e)
+
+
+def on_call_finished(db: Session, attempt: CallAttempt) -> None:
+    run = db.get(DispatchRun, attempt.run_id) if attempt.run_id else None
+    if not run or run.status != "running":
+        return
+    if attempt.outcome == "accepted":
+        _accept(db, run, attempt)
+    else:
+        _call_next(db, run)
+
+
+def _accept(db: Session, run: DispatchRun, attempt: CallAttempt) -> None:
+    s = get_settings()
+    ticket = db.get(Ticket, run.ticket_id)
+    cand = run.candidates[run.current_index]
+    _close_run(db, run, "accepted", f"Accepted by {attempt.helper_name}")
+    ticket.assignee_id = cand["helper_id"]
+    ticket.assignee_profile_id = cand.get("profile_id")
+    ticket.assignee_name = cand["name"]
+    ticket.assignee_phone = cand["phone"]
+    ticket.dispatch_status = DispatchStatus.ASSIGNED
+    log_event(db, ticket.id, "helper_accepted", f"{cand['name']} accepted the task")
+
+    src = get_source()
+    if s.extrahand_allow_assignment or src.mode == "mock":
+        try:
+            src.assign_helper(ticket.id, cand["helper_id"], cand.get("profile_id"), cand["name"])
+            ticket.assignment_local_only = False
+            log_event(db, ticket.id, "assigned_remote", f"Assigned {cand['name']} on ExtraHand")
+        except ExtraHandError as e:
+            ticket.assignment_local_only = True
+            log_event(db, ticket.id, "assign_failed", f"ExtraHand assignment failed, kept locally: {e}")
+    else:
+        ticket.assignment_local_only = True
+        log_event(db, ticket.id, "assigned_local",
+                  "Assignment recorded locally (EXTRAHAND_ALLOW_ASSIGNMENT is off)")
+
+    from .followups import schedule_for_ticket
+
+    schedule_for_ticket(db, ticket)
+
+
+def cancel_dispatch(db: Session, ticket_id: str, reason: str = "Cancelled by operator") -> None:
+    with engine_lock:
+        run = active_run(db, ticket_id)
+        if not run:
+            return
+        _close_run(db, run, "cancelled", reason)
+        for a in db.query(CallAttempt).filter(CallAttempt.run_id == run.id, CallAttempt.status.in_(ACTIVE_STATUSES)):
+            a.status, a.outcome, a.ended_at = "ended", "cancelled", utcnow()
+            try:
+                if p := get_provider_safe()[0]:
+                    p.hangup(a)
+            except Exception as e:  # noqa: BLE001
+                log.warning("hangup failed: %s", e)
+        ticket = db.get(Ticket, ticket_id)
+        if ticket.dispatch_status == DispatchStatus.DISPATCHING:
+            ticket.dispatch_status = DispatchStatus.NEW
+        log_event(db, ticket_id, "dispatch_cancelled", reason)
+        db.commit()
+
+
+def escalate(db: Session, ticket: Ticket, reason: str, details: str) -> Escalation:
+    """Hands the ticket to customer care / helper support."""
+    existing = db.query(Escalation).filter(
+        Escalation.ticket_id == ticket.id, Escalation.reason == reason, Escalation.status != "resolved"
+    ).first()
+    ticket.dispatch_status = DispatchStatus.ESCALATED
+    if existing:
+        existing.details = details
+        return existing
+    esc = Escalation(ticket_id=ticket.id, reason=reason, details=details)
+    db.add(esc)
+    log_event(db, ticket.id, "escalated", f"Moved to customer care: {reason.replace('_', ' ')}")
+    return esc
