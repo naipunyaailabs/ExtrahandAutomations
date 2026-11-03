@@ -35,3 +35,6 @@ dist/
 *.swo
 .DS_Store
 Thumbs.db
+
+# OpenWA WhatsApp gateway (separate project, cloned locally)
+openwa-gateway/

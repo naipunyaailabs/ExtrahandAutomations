@@ -35,28 +35,54 @@ class Base(DeclarativeBase):
 
 
 def _migrate_helpers_table() -> None:
-    if not is_sqlite:
-        return
+    new_cols = [
+        ("email", "VARCHAR(200)"),
+        ("categories", "JSON" if is_sqlite else "JSONB"),
+        ("work_areas", "JSON" if is_sqlite else "JSONB"),
+        ("address", "VARCHAR(500)"),
+        ("state", "VARCHAR(100)"),
+        ("pincode", "VARCHAR(20)"),
+        ("status", "VARCHAR(50) DEFAULT 'active'"),
+        ("is_active", "BOOLEAN DEFAULT 1" if is_sqlite else "BOOLEAN DEFAULT true"),
+        ("is_verified", "BOOLEAN DEFAULT 0" if is_sqlite else "BOOLEAN DEFAULT false"),
+        ("can_accept_tasks", "BOOLEAN DEFAULT 1" if is_sqlite else "BOOLEAN DEFAULT true"),
+        ("work_shift_type", "VARCHAR(50)"),
+    ]
     with engine.connect() as conn:
-        cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(helpers)").fetchall()}
-        if not cols:
-            return
-        new_cols = [
-            ("email", "VARCHAR(200)"),
-            ("categories", "JSON"),
-            ("work_areas", "JSON"),
-            ("address", "VARCHAR(500)"),
-            ("state", "VARCHAR(100)"),
-            ("pincode", "VARCHAR(20)"),
-            ("status", "VARCHAR(50) DEFAULT 'active'"),
-            ("is_active", "BOOLEAN DEFAULT 1"),
-            ("is_verified", "BOOLEAN DEFAULT 0"),
-            ("can_accept_tasks", "BOOLEAN DEFAULT 1"),
-            ("work_shift_type", "VARCHAR(50)"),
-        ]
-        for col_name, col_type in new_cols:
-            if col_name not in cols:
-                conn.exec_driver_sql(f"ALTER TABLE helpers ADD COLUMN {col_name} {col_type}")
+        if is_sqlite:
+            cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(helpers)").fetchall()}
+            if not cols:
+                return
+            for col_name, col_type in new_cols:
+                if col_name not in cols:
+                    conn.exec_driver_sql(f"ALTER TABLE helpers ADD COLUMN {col_name} {col_type}")
+        else:
+            for col_name, col_type in new_cols:
+                conn.exec_driver_sql(f"ALTER TABLE helpers ADD COLUMN IF NOT EXISTS {col_name} {col_type}")
+        conn.commit()
+
+
+def _migrate_call_attempts_table() -> None:
+    new_cols = [
+        ("customer_id", "VARCHAR(64)"),
+        ("customer_name", "VARCHAR(200)"),
+        ("language", "VARCHAR(20) DEFAULT 'en'"),
+        ("transcript", "TEXT"),
+        ("summary", "TEXT"),
+        ("duration_seconds", "INTEGER DEFAULT 0"),
+        ("recording_url", "VARCHAR(500)"),
+    ]
+    with engine.connect() as conn:
+        if is_sqlite:
+            cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(call_attempts)").fetchall()}
+            if not cols:
+                return
+            for col_name, col_type in new_cols:
+                if col_name not in cols:
+                    conn.exec_driver_sql(f"ALTER TABLE call_attempts ADD COLUMN {col_name} {col_type}")
+        else:
+            for col_name, col_type in new_cols:
+                conn.exec_driver_sql(f"ALTER TABLE call_attempts ADD COLUMN IF NOT EXISTS {col_name} {col_type}")
         conn.commit()
 
 
@@ -65,6 +91,7 @@ def init_db() -> None:
 
     Base.metadata.create_all(engine)
     _migrate_helpers_table()
+    _migrate_call_attempts_table()
 
 
 def get_db() -> Iterator[Session]:

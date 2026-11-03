@@ -1,56 +1,106 @@
-import type {
-  AppConfig, Call, Escalation, EventItem, Helper, HelperDetail, HelperFilters, RuntimeSettings, Stats, Ticket, TicketDetail,
-} from "./types";
+/**
+ * ExtraHand Intelligence Platform - API Gateway Client
+ * 
+ * Configured via frontend/.env:
+ * - VITE_API_BASE_URL: Main FastAPI backend URL (e.g. http://127.0.0.1:8000)
+ * - VITE_CALLING_SERVICE_URL: Service 1 (Voice Calling & Telephony)
+ * - VITE_WHATSAPP_SERVICE_URL: Service 2 (WhatsApp Dispatch)
+ * - VITE_MARKETING_SERVICE_URL: Service 3 (Festival & Demand Marketing)
+ */
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(path, {
-    method,
-    headers: body ? { "Content-Type": "application/json" } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-  });
+import { createCallingService } from "./services/calling";
+import { createWhatsAppService } from "./services/whatsapp";
+import { createMarketingService } from "./services/marketing";
+import { createEngagementService } from "./services/engagement";
+
+// Base URLs from .env
+export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
+export const CALLING_SERVICE_URL = (import.meta.env.VITE_CALLING_SERVICE_URL || API_BASE_URL).replace(/\/+$/, "");
+export const WHATSAPP_SERVICE_URL = (import.meta.env.VITE_WHATSAPP_SERVICE_URL || API_BASE_URL).replace(/\/+$/, "");
+export const MARKETING_SERVICE_URL = (import.meta.env.VITE_MARKETING_SERVICE_URL || API_BASE_URL).replace(/\/+$/, "");
+export const ENGAGEMENT_SERVICE_URL = (import.meta.env.VITE_ENGAGEMENT_SERVICE_URL || API_BASE_URL).replace(/\/+$/, "");
+
+/**
+ * Resolves the target URL for a request.
+ * In local development, relative paths are preferred so Vite dev proxy handles the connection
+ * smoothly without browser CORS or localhost/127.0.0.1 mismatch issues.
+ * In production or with remote URLs, the full service URL is used.
+ */
+function resolveUrl(path: string, serviceUrl?: string): string {
+  if (path.startsWith("http://") || path.startsWith("https://")) {
+    return path;
+  }
+  const base = serviceUrl || API_BASE_URL;
+  // If base is empty or points to local dev ports, use relative path for Vite proxy
+  if (!base || base.includes("localhost:8000") || base.includes("127.0.0.1:8000")) {
+    return path.startsWith("/") ? path : `/${path}`;
+  }
+  const cleanPath = path.startsWith("/") ? path : `/${path}`;
+  return `${base}${cleanPath}`;
+}
+
+/**
+ * Core HTTP client with error handling and JSON parsing.
+ */
+export async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  serviceUrl?: string
+): Promise<T> {
+  const url = resolveUrl(path, serviceUrl);
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method,
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    throw new Error(
+      `Cannot reach the server at ${url}. Check that the frontend (npm run dev) and backend (FastAPI port 8000) are running.`
+    );
+  }
+
   if (!res.ok) {
     let msg = `${res.status} ${res.statusText}`;
     try {
       const data = await res.json();
-      if (data?.detail) msg = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail);
+      if (data?.detail) {
+        msg = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail);
+      }
     } catch {
-      /* not JSON */
+      /* non-JSON response */
     }
     throw new Error(msg);
   }
+
   return res.status === 204 ? (undefined as T) : res.json();
 }
 
-const get = <T,>(path: string) => request<T>("GET", path);
-const post = <T,>(path: string, body?: unknown) => request<T>("POST", path, body ?? {});
+// Instantiate individual services
+const callingService = createCallingService(request, CALLING_SERVICE_URL);
+const whatsAppService = createWhatsAppService(request, WHATSAPP_SERVICE_URL);
+const marketingService = createMarketingService(request, MARKETING_SERVICE_URL);
+const engagementService = createEngagementService(request, ENGAGEMENT_SERVICE_URL);
 
+/**
+ * Unified API Client
+ * Exposes individual services while maintaining 100% backward compatibility for all existing callers.
+ */
 export const api = {
-  stats: () => get<Stats>("/api/stats"),
-  config: () => get<AppConfig>("/api/config"),
-  sync: () => post<Record<string, number>>("/api/sync"),
-  tickets: (params: { dispatch_status?: string; status?: string; q?: string; order?: string } = {}) => {
-    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v) as [string, string][]);
-    return get<Ticket[]>(`/api/tickets${qs.size ? `?${qs}` : ""}`);
-  },
-  ticket: (id: string) => get<TicketDetail>(`/api/tickets/${encodeURIComponent(id)}`),
-  dispatch: (id: string) => post(`/api/tickets/${encodeURIComponent(id)}/dispatch`),
-  cancelDispatch: (id: string) => post(`/api/tickets/${encodeURIComponent(id)}/dispatch/cancel`),
-  calls: (active = false) => get<Call[]>(`/api/calls${active ? "?active=true" : ""}`),
-  simulate: (callId: number, action: string, digit?: string) =>
-    post<{ call: Call; spoken: string | null; max_prompts: number }>(`/api/simulator/calls/${callId}`, { action, digit }),
-  escalations: (status?: string) => get<Escalation[]>(`/api/escalations${status ? `?status=${status}` : ""}`),
-  updateEscalation: (id: number, body: Partial<Pick<Escalation, "status" | "notes" | "assigned_to">>) =>
-    request<Escalation>("PATCH", `/api/escalations/${id}`, body),
-  redispatch: (id: number) => post(`/api/escalations/${id}/redispatch`),
-  events: (limit = 30) => get<EventItem[]>(`/api/events?limit=${limit}`),
-  helpers: (params?: { q?: string; service?: string; location?: string; status?: string; is_verified?: boolean; can_accept_tasks?: boolean }) => {
-    const qs = new URLSearchParams(
-      Object.entries(params ?? {}).filter(([, v]) => v !== undefined && v !== "") as [string, string][]
-    );
-    return get<Helper[]>(`/api/helpers${qs.size ? `?${qs}` : ""}`);
-  },
-  helper: (id: string) => get<HelperDetail>(`/api/helpers/${encodeURIComponent(id)}`),
-  helperFilters: () => get<HelperFilters>("/api/helpers/filters"),
-  syncHelpers: () => post<{ ok: boolean; stats: Record<string, number>; total: number }>("/api/helpers/sync"),
-  saveSettings: (body: Partial<RuntimeSettings>) => request<RuntimeSettings>("PUT", "/api/settings", body),
+  // Service 1: Calling Service
+  ...callingService,
+  calling: callingService,
+
+  // Service 2: WhatsApp Service
+  whatsapp: whatsAppService,
+
+  // Service 3: Marketing & Advertisement Service
+  marketing: marketingService,
+  advestiment: marketingService, // Backward-compatible alias for existing components
+
+  // Service 4: User Engagement & Operational Performance Analytics Service
+  engagement: engagementService,
+  reports: engagementService, // Backward-compatible alias for existing components
 };

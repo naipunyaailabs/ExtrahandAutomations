@@ -2,10 +2,6 @@ import { useEffect, useState } from "react";
 
 export type Theme = "light" | "dark";
 
-function systemTheme(): Theme {
-  return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
-}
-
 function storedTheme(): Theme | null {
   try {
     const t = localStorage.getItem("theme");
@@ -15,17 +11,13 @@ function storedTheme(): Theme | null {
   }
 }
 
-/** Dark-first theme that follows the OS until the user picks one. */
+/** Light-first theme for clean white background design. */
 export function useTheme() {
-  const [theme, setTheme] = useState<Theme>(() => storedTheme() ?? systemTheme());
+  const [theme, setTheme] = useState<Theme>(() => storedTheme() ?? "light");
 
   useEffect(() => {
-    if (storedTheme()) return;
-    const mq = window.matchMedia("(prefers-color-scheme: light)");
-    const onChange = () => setTheme(mq.matches ? "light" : "dark");
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
-  }, []);
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
 
   const toggle = () => {
     const next: Theme = theme === "dark" ? "light" : "dark";

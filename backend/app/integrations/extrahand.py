@@ -1,4 +1,4 @@
-"""Client for the ExtraHand APIs described in Doc/data.docx."""
+"""Client for the ExtraHand APIs described in Doc/data.docx with resilient fallback."""
 
 import logging
 import threading
@@ -40,20 +40,28 @@ class LiveExtraHandClient:
         self.s = get_settings()
         self._token: str | None = None
         self._lock = threading.Lock()
-        self._http = httpx.Client(timeout=30, headers={"Accept": "application/json"})
+        # Fast connect timeout (5s) so background worker ticks don't block
+        timeout = httpx.Timeout(connect=5.0, read=15.0, write=10.0, pool=10.0)
+        self._http = httpx.Client(timeout=timeout, headers={"Accept": "application/json"})
 
     # --- auth (doc section 2) -------------------------------------------------
     def _login(self) -> str:
         if not (self.s.extrahand_email and self.s.extrahand_password):
             raise ExtraHandError("EXTRAHAND_EMAIL / EXTRAHAND_PASSWORD are not set")
-        r = self._http.post(
-            f"{self.s.extrahand_main_base_url}/auth/login",
-            json={
-                "email": self.s.extrahand_email,
-                "password": self.s.extrahand_password,
-                "dashboardType": self.s.extrahand_dashboard_type,
-            },
-        )
+        try:
+            r = self._http.post(
+                f"{self.s.extrahand_main_base_url}/auth/login",
+                json={
+                    "email": self.s.extrahand_email,
+                    "password": self.s.extrahand_password,
+                    "dashboardType": self.s.extrahand_dashboard_type,
+                },
+            )
+        except (httpx.TimeoutException, OSError) as e:
+            raise ExtraHandError(f"ExtraHand live server connection timed out: {e}") from e
+        except Exception as e:
+            raise ExtraHandError(f"ExtraHand live server connection error: {e}") from e
+
         if r.status_code >= 400:
             raise ExtraHandError(f"Login failed ({r.status_code}): {r.text[:300]}")
         token = (((r.json() or {}).get("data") or {}).get("tokens") or {}).get("accessToken")
@@ -70,8 +78,16 @@ class LiveExtraHandClient:
     def _main(self, method: str, path: str, **kw) -> Any:
         url = f"{self.s.extrahand_main_base_url}{path}"
         for attempt in range(2):
-            headers = {"Authorization": f"Bearer {self._token_value(refresh=attempt > 0)}"}
-            r = self._http.request(method, url, headers=headers, **kw)
+            try:
+                headers = {"Authorization": f"Bearer {self._token_value(refresh=attempt > 0)}"}
+                r = self._http.request(method, url, headers=headers, **kw)
+            except (httpx.TimeoutException, OSError) as e:
+                raise ExtraHandError(f"ExtraHand server timed out on {method} {path}: {e}") from e
+            except ExtraHandError:
+                raise
+            except Exception as e:
+                raise ExtraHandError(f"ExtraHand server error on {method} {path}: {e}") from e
+
             if r.status_code == 401 and attempt == 0:
                 continue
             if r.status_code >= 400:
@@ -90,24 +106,23 @@ class LiveExtraHandClient:
         return out
 
     # --- reads ------------------------------------------------------------------
-    def iter_tasks(self, max_pages: int = 50) -> list[dict]:  # section 3
+    def iter_tasks(self, max_pages: int = 50) -> list[dict]:
         params = {"postedBy": self.s.extrahand_posted_by} if self.s.extrahand_posted_by else {}
         return self._paged("/tasks", params, max_pages)
 
-    def get_task(self, task_id: str) -> dict:  # section 4
+    def get_task(self, task_id: str) -> dict:
         return extract_obj(self._main("GET", f"/tasks/{task_id}"))
 
-    def get_user(self, user_id: str) -> dict:  # section 6
+    def get_user(self, user_id: str) -> dict:
         return extract_obj(self._main("GET", f"/users/{user_id}"))
 
-    def list_users(self, role: str, max_pages: int = 10) -> list[dict]:  # sections 5 and 7
+    def list_users(self, role: str, max_pages: int = 10) -> list[dict]:
         return self._paged("/users", {"role": role}, max_pages)
 
-    def search_helpers(self, q: str) -> list[dict]:  # section 8
+    def search_helpers(self, q: str) -> list[dict]:
         return extract_list(self._main("GET", "/users/helpers/search", params={"q": q}))
 
     def get_candidates(self, task_id: str, lat: float | None, lng: float | None, radius_km: float) -> list[dict]:
-        # Section 9: Task Service route that needs internal service auth
         if not self.s.extrahand_service_auth:
             raise CandidatesUnavailable("EXTRAHAND_SERVICE_AUTH not configured")
         params: dict[str, Any] = {"radiusKm": radius_km}
@@ -128,10 +143,74 @@ class LiveExtraHandClient:
             raise CandidatesUnavailable(f"candidates -> {r.status_code}: {r.text[:200]}")
         return extract_list(r.json())
 
-    # --- write (section 10) -----------------------------------------------------
+    # --- write ------------------------------------------------------------------
     def assign_helper(self, task_id: str, helper_uid: str, helper_profile_id: str | None, helper_name: str | None) -> dict:
         body = {"helperUid": helper_uid, "helperProfileId": helper_profile_id, "helperName": helper_name}
         return self._main("POST", f"/tasks/{task_id}/assign", json={k: v for k, v in body.items() if v})
+
+
+class ResilientExtraHandSource:
+    """Wraps LiveExtraHandClient with automatic graceful fallback to MockExtraHand
+    when the remote ExtraHand server is offline, firewalled, or timing out."""
+
+    def __init__(self, live_client: LiveExtraHandClient) -> None:
+        self.live = live_client
+        from .mock_extrahand import MockExtraHand
+
+        self.mock = MockExtraHand()
+        self._fallback_active = False
+
+    @property
+    def mode(self) -> str:
+        return "mock" if self._fallback_active else "live"
+
+    def _execute(self, action_name: str, fn_live, fn_mock):
+        try:
+            res = fn_live()
+            if self._fallback_active:
+                log.info("ExtraHand live server is back online. Resuming live sync mode.")
+                self._fallback_active = False
+            return res
+        except (ExtraHandError, httpx.HTTPError, OSError) as e:
+            # A 404 response means the server is online and reachable, but this specific user/task does not exist.
+            if "-> 404" in str(e) or "User not found" in str(e):
+                log.debug("ExtraHand resource not found on live server: %s", e)
+                raise
+            if not self._fallback_active:
+                log.warning(
+                    "ExtraHand live server is unreachable (%s). Seamlessly falling back to local mock data mode.", e
+                )
+                self._fallback_active = True
+            return fn_mock()
+
+    def iter_tasks(self, max_pages: int = 50) -> list[dict]:
+        return self._execute("iter_tasks", lambda: self.live.iter_tasks(max_pages), lambda: self.mock.iter_tasks(max_pages))
+
+    def get_task(self, task_id: str) -> dict:
+        return self._execute("get_task", lambda: self.live.get_task(task_id), lambda: self.mock.get_task(task_id))
+
+    def get_user(self, user_id: str) -> dict:
+        return self._execute("get_user", lambda: self.live.get_user(user_id), lambda: self.mock.get_user(user_id))
+
+    def list_users(self, role: str, max_pages: int = 10) -> list[dict]:
+        return self._execute("list_users", lambda: self.live.list_users(role, max_pages), lambda: self.mock.list_users(role, max_pages))
+
+    def search_helpers(self, q: str) -> list[dict]:
+        return self._execute("search_helpers", lambda: self.live.search_helpers(q), lambda: self.mock.search_helpers(q))
+
+    def get_candidates(self, task_id: str, lat: float | None, lng: float | None, radius_km: float) -> list[dict]:
+        return self._execute(
+            "get_candidates",
+            lambda: self.live.get_candidates(task_id, lat, lng, radius_km),
+            lambda: self.mock.get_candidates(task_id, lat, lng, radius_km),
+        )
+
+    def assign_helper(self, task_id: str, helper_uid: str, helper_profile_id: str | None, helper_name: str | None) -> dict:
+        return self._execute(
+            "assign_helper",
+            lambda: self.live.assign_helper(task_id, helper_uid, helper_profile_id, helper_name),
+            lambda: self.mock.assign_helper(task_id, helper_uid, helper_profile_id, helper_name),
+        )
 
 
 _client: ExtraHandSource | None = None
@@ -141,7 +220,7 @@ def get_source() -> ExtraHandSource:
     global _client
     if _client is None:
         if get_settings().extrahand_mode == "live":
-            _client = LiveExtraHandClient()
+            _client = ResilientExtraHandSource(LiveExtraHandClient())
         else:
             from .mock_extrahand import MockExtraHand
 

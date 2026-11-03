@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Autom@tion · Helper dispatch</title>
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>Extrahand Automation</title>
+    <link rel="icon" type="image/png" href="/extrahand-logo.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -12,10 +12,14 @@
       rel="stylesheet"
     />
     <script>
-      // Apply the saved theme before first paint to avoid a flash
+      // Apply the saved theme before first paint; default to light theme for white backgrounds
       try {
         var t = localStorage.getItem("theme");
-        if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+        if (!t) {
+          t = "light";
+          localStorage.setItem("theme", "light");
+        }
+        document.documentElement.dataset.theme = t;
       } catch (e) {}
     </script>
   </head>

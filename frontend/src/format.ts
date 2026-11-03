@@ -3,8 +3,24 @@ const dateTime = new Intl.DateTimeFormat("en-IN", {
 });
 const timeOnly = new Intl.DateTimeFormat("en-IN", { hour: "numeric", minute: "2-digit", second: "2-digit" });
 
-export const fmtDateTime = (iso: string | null | undefined) => (iso ? dateTime.format(new Date(iso)) : "—");
-export const fmtTime = (iso: string | null | undefined) => (iso ? timeOnly.format(new Date(iso)) : "—");
+export const fmtDateTime = (iso: string | null | undefined) => {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    return isNaN(d.getTime()) ? String(iso) : dateTime.format(d);
+  } catch {
+    return String(iso);
+  }
+};
+export const fmtTime = (iso: string | null | undefined) => {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    return isNaN(d.getTime()) ? String(iso) : timeOnly.format(d);
+  } catch {
+    return String(iso);
+  }
+};
 
 export const fmtMoney = (n: number | null | undefined) =>
   n == null ? "—" : `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
@@ -23,3 +39,33 @@ export function fmtRelative(iso: string | null | undefined): string {
 export const fmtOffset = (m: number) => (m % 60 === 0 ? `${m / 60}h` : m > 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`);
 
 export const humanize = (s: string | null | undefined) => (s ? s.replace(/_/g, " ") : "—");
+
+export const fmtFullDate = (iso: string | null | undefined) => {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso.length === 10 ? `${iso}T00:00:00` : iso);
+    if (isNaN(d.getTime())) return String(iso);
+    return new Intl.DateTimeFormat("en-IN", {
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    }).format(d);
+  } catch {
+    return String(iso);
+  }
+};
+
+export const fmtShortDate = (iso: string | null | undefined) => {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso.length === 10 ? `${iso}T00:00:00` : iso);
+    if (isNaN(d.getTime())) return String(iso);
+    return new Intl.DateTimeFormat("en-IN", {
+      day: "numeric",
+      month: "short",
+    }).format(d);
+  } catch {
+    return String(iso);
+  }
+};

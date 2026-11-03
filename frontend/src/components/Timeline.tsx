@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
+import { fmtTime } from "../format";
 import type { EventItem } from "../types";
 import type { Tone } from "./ui";
 
@@ -14,7 +15,15 @@ function toneForEvent(kind: string): Tone {
 }
 
 /** Vertical timeline whose line draws itself in; new events fade in at the top. */
-export function Timeline({ events, showTicket, time }: { events: EventItem[]; showTicket?: boolean; time: (iso: string) => string }) {
+export function Timeline({
+  events = [],
+  showTicket,
+  time = fmtTime,
+}: {
+  events?: EventItem[];
+  showTicket?: boolean;
+  time?: (iso: string) => string;
+}) {
   const mounted = useRef(false);
   useEffect(() => { mounted.current = true; }, []);
 

@@ -1,14 +1,66 @@
+from datetime import datetime
+from typing import Optional
+import uuid
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import CallAttempt, DispatchRun, Escalation, Event, FollowUp, Ticket
+from ..models import CallAttempt, DispatchRun, DispatchStatus, Escalation, Event, FollowUp, Ticket, utcnow
+from ..services.common import log_event
 from ..services.dispatch import DispatchError, cancel_dispatch, start_dispatch
 from ..services.ivr import ACTIVE_STATUSES
 from .serializers import call_out, escalation_out, event_out, followup_out, run_out, ticket_out
 
 router = APIRouter(prefix="/api/tickets", tags=["tickets"])
+
+
+class CreateTicketPayload(BaseModel):
+    title: str
+    category: str
+    city: str
+    address: Optional[str] = None
+    customer_name: Optional[str] = None
+    customer_phone: Optional[str] = None
+    budget: Optional[float] = None
+    scheduled_at: Optional[datetime] = None
+    description: Optional[str] = None
+
+
+@router.post("")
+def create_ticket(payload: CreateTicketPayload, db: Session = Depends(get_db)):
+    """Upload/Create a customer task. Automatically broadcasts to helpers matching location and service skills via WhatsApp."""
+    ticket_id = f"cust_{uuid.uuid4().hex[:12]}"
+    t = Ticket(
+        id=ticket_id,
+        title=payload.title,
+        category=payload.category,
+        city=payload.city,
+        address=payload.address or payload.city,
+        customer_name=payload.customer_name or "Valued Customer",
+        customer_phone=payload.customer_phone or "+919876543210",
+        budget=payload.budget or 500,
+        scheduled_at=payload.scheduled_at or utcnow(),
+        dispatch_status=DispatchStatus.NEW,
+        status="open",
+        created_at=utcnow(),
+        remote_updated_at=utcnow(),
+    )
+    db.add(t)
+    log_event(db, t.id, "created", f"Customer uploaded task: {t.title} ({t.category}) in {t.city}")
+    db.commit()
+    db.refresh(t)
+
+    # Automatically broadcast to matching helpers via WhatsApp Dispatch Agent
+    try:
+        from whatsapp.agent import get_whatsapp_dispatch_agent
+        get_whatsapp_dispatch_agent().dispatch_for_task(t.id)
+    except Exception as wa_err:
+        pass
+
+    return ticket_out(t)
+
 
 
 @router.get("")

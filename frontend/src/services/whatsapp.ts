@@ -1,0 +1,69 @@
+/**
+ * Service 2: WhatsApp Dispatch & Meta Cloud Service
+ * 
+ * Manages official Meta WhatsApp Cloud API broadcasts, QR pairing sessions,
+ * task dispatch messages to helpers, and automated acceptance callbacks.
+ */
+
+import type {
+  TaskLocationCandidates,
+  WhatsAppBroadcastResult,
+  WhatsAppSendResult,
+  WhatsAppStatus,
+  WhatsAppTemplate,
+} from "../types";
+
+export function createWhatsAppService(
+  request: <T>(method: string, path: string, body?: unknown, serviceUrl?: string) => Promise<T>,
+  serviceUrl?: string
+) {
+  const get = <T>(path: string) => request<T>("GET", path, undefined, serviceUrl);
+  const post = <T>(path: string, body?: unknown) => request<T>("POST", path, body, serviceUrl);
+
+  return {
+    status: () => get<WhatsAppStatus>("/api/whatsapp/status"),
+    qr: () =>
+      get<{ session_id?: string; qr?: string; status?: string; simulated?: boolean; message?: string; error?: string }>(
+        "/api/whatsapp/qr"
+      ),
+    start: () => post<{ session_id?: string; status?: string }>("/api/whatsapp/start"),
+    pairingCode: (phone: string) => post<{ code?: string; error?: string }>("/api/whatsapp/pairing-code", { phone }),
+    templates: () => get<WhatsAppTemplate[]>("/api/whatsapp/templates"),
+    sendTemplate: (to: string, template_id: string, variables: Record<string, string>, ticket_id?: string) =>
+      post<WhatsAppSendResult>("/api/whatsapp/send-template", { to, template_id, variables, ticket_id }),
+    sendMessage: (to: string, message: string) => post<WhatsAppSendResult>("/api/whatsapp/send-message", { to, message }),
+    sendDispatch: (payload: {
+      ticket_id: string;
+      helper_id: string;
+      helper_phone: string;
+      helper_name?: string;
+      task_title: string;
+      location: string;
+      scheduled_time: string;
+      payout: string;
+    }) => post<WhatsAppSendResult>("/api/whatsapp/send-dispatch", payload),
+    notifyAssigned: (payload: {
+      ticket_id: string;
+      helper_id: string;
+      helper_phone: string;
+      helper_name?: string;
+      task_title: string;
+      location: string;
+      scheduled_time: string;
+      payout: string;
+    }) => post<WhatsAppSendResult>("/api/whatsapp/notify-assigned", payload),
+    taskCandidates: (ticketId: string, radiusKm?: number) =>
+      get<TaskLocationCandidates>(
+        `/api/whatsapp/task-candidates/${encodeURIComponent(ticketId)}${radiusKm ? `?radius_km=${radiusKm}` : ""}`
+      ),
+    broadcastTask: (ticketId: string, radiusKm?: number) =>
+      post<WhatsAppBroadcastResult>("/api/whatsapp/broadcast-task", { ticket_id: ticketId, radius_km: radiusKm }),
+    simulateReply: (from: string, body: string) =>
+      post<{ status: string; result?: unknown }>("/api/whatsapp/webhook", {
+        event: "message.received",
+        from,
+        body,
+      }),
+  };
+}
+

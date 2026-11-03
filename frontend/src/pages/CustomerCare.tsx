@@ -8,7 +8,7 @@ import { usePoll } from "../hooks";
 import { fmtDateTime, fmtMoney, fmtRelative } from "../format";
 import type { Escalation } from "../types";
 
-const REASONS: Record<string, { label: string; icon: LucideIcon }> = {
+export const REASONS: Record<string, { label: string; icon: LucideIcon }> = {
   no_helper_accepted: { label: "No helper accepted", icon: UsersRound },
   no_eligible_helpers: { label: "No eligible helpers nearby", icon: SearchX },
   helper_cannot_attend: { label: "Helper cannot attend", icon: UserX },
@@ -48,7 +48,7 @@ export default function CustomerCare() {
   );
 }
 
-function EscalationCard({ esc, onChange }: { esc: Escalation; onChange: () => void }) {
+export function EscalationCard({ esc, onChange }: { esc: Escalation; onChange: () => void }) {
   const t = esc.ticket;
   const [notes, setNotes] = useState(esc.notes ?? "");
   const [owner, setOwner] = useState(esc.assigned_to ?? "");

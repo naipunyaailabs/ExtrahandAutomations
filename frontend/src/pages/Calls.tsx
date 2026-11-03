@@ -24,7 +24,7 @@ export default function Calls() {
   return (
     <Stagger className="page">
       <motion.div className="page-head" variants={itemVariants}>
-        <h1>Calls</h1>
+        <h1>Call history</h1>
         <p className="muted">
           The agent reads out the task and the payment. The helper presses <b>1</b> to accept or <b>2</b> to reject.
           With no key pressed the message repeats, up to {config.ivr_max_prompts} times, then the agent hangs up and calls the next helper.

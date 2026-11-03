@@ -21,12 +21,26 @@ ACTIVE_STATUSES = ("queued", "ringing", "in_progress")
 DIGIT_OUTCOMES = {
     "dispatch": {"1": "accepted", "2": "rejected"},
     "followup": {"1": "confirmed", "2": "declined"},
+    "feedback": {
+        "1": "rating_1",
+        "2": "rating_2",
+        "3": "rating_3",
+        "4": "rating_4",
+        "5": "rating_5",
+        "9": "callback_requested",
+    },
 }
 CLOSING_LINES = {
     "accepted": "Thank you. The task has been assigned to you. You will get reminder calls before it starts. Goodbye.",
     "rejected": "Okay, thank you for your time. Goodbye.",
     "confirmed": "Thank you for confirming. Goodbye.",
     "declined": "Thank you for letting us know. Our support team will contact you. Goodbye.",
+    "rating_5": "Thank you for the 5-star rating! We are glad you had a wonderful experience with ExtraHand. Goodbye.",
+    "rating_4": "Thank you for your 4-star rating! We appreciate your valuable feedback. Goodbye.",
+    "rating_3": "Thank you for your rating. We will work hard to make your next experience even better. Goodbye.",
+    "rating_2": "We apologize that your experience was not up to expectations. A support executive will follow up with you. Goodbye.",
+    "rating_1": "We sincerely apologize for the unsatisfactory experience. Our operations team will contact you shortly. Goodbye.",
+    "callback_requested": "Understood! We have scheduled a callback at a more convenient time for you. Goodbye.",
     "no_input": "We did not receive any input. Goodbye.",
 }
 
@@ -143,6 +157,8 @@ def finish(db: Session, attempt: CallAttempt, outcome: str) -> None:
     db.flush()
     if attempt.purpose == "dispatch":
         from .dispatch import on_call_finished
+    elif attempt.purpose == "feedback":
+        from .feedback_agent import on_feedback_call_finished as on_call_finished
     else:
         from .followups import on_call_finished
     on_call_finished(db, attempt)

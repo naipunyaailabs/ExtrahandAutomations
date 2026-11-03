@@ -8,6 +8,37 @@ def iso(dt: datetime | None) -> str | None:
 
 
 def ticket_out(t: Ticket) -> dict:
+    from datetime import datetime, timezone, timedelta
+    # Use IST (UTC+5:30) as operations timezone so day rollover matches Indian local time
+    IST = timezone(timedelta(hours=5, minutes=30))
+    now = datetime.now(IST)
+    
+    date_status = "unscheduled"
+    days_diff = None
+    is_today = False
+    is_upcoming = False
+    is_past = False
+    
+    target_dt = t.scheduled_at or t.created_at
+    if target_dt:
+        if target_dt.tzinfo is None:
+            target_dt = target_dt.replace(tzinfo=timezone.utc).astimezone(IST)
+        else:
+            target_dt = target_dt.astimezone(IST)
+        target_date = target_dt.date()
+        today_date = now.date()
+        days_diff = (target_date - today_date).days
+        
+        if days_diff == 0:
+            is_today = True
+            date_status = "today"
+        elif days_diff > 0:
+            is_upcoming = True
+            date_status = "upcoming"
+        else:
+            is_past = True
+            date_status = "past"
+
     return {
         "id": t.id, "title": t.title, "description": t.description, "category": t.category,
         "status": t.status, "dispatch_status": t.dispatch_status, "budget": t.budget,
@@ -19,15 +50,24 @@ def ticket_out(t: Ticket) -> dict:
         "assignment_local_only": t.assignment_local_only,
         "created_at": iso(t.created_at),
         "synced_at": iso(t.synced_at), "updated_at": iso(t.updated_at),
+        "date_status": date_status,
+        "is_today": is_today,
+        "is_upcoming": is_upcoming,
+        "is_past": is_past,
+        "days_from_today": days_diff,
     }
 
 
 def call_out(a: CallAttempt, ticket: Ticket | None = None) -> dict:
     d = {
         "id": a.id, "ticket_id": a.ticket_id, "purpose": a.purpose, "run_id": a.run_id, "followup_id": a.followup_id,
-        "helper_id": a.helper_id, "helper_name": a.helper_name, "phone": a.phone, "provider": a.provider,
+        "helper_id": a.helper_id, "helper_name": a.helper_name,
+        "customer_id": a.customer_id, "customer_name": a.customer_name,
+        "phone": a.phone, "provider": a.provider,
         "provider_call_id": a.provider_call_id, "status": a.status, "outcome": a.outcome,
-        "prompts_played": a.prompts_played, "digits": a.digits, "script": a.script, "error": a.error,
+        "prompts_played": a.prompts_played, "digits": a.digits, "script": a.script,
+        "language": a.language, "transcript": a.transcript, "summary": a.summary,
+        "duration_seconds": a.duration_seconds, "error": a.error,
         "created_at": iso(a.created_at), "answered_at": iso(a.answered_at), "ended_at": iso(a.ended_at),
     }
     if ticket:

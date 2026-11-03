@@ -9,7 +9,7 @@ interface NodeProps { to: string; tone: Tone; icon: LucideIcon; label: string; h
 function Node({ to, tone, icon: Icon, label, hint, value, tip }: NodeProps) {
   const glowKey = useIncreaseKey(value);
   return (
-    <Link to={to} className={`node tone-${tone}`} data-tip={tip}>
+    <Link to={to} target="_blank" className={`node tone-${tone}`} data-tip={tip}>
       {glowKey > 0 && (
         <motion.span key={glowKey} className="node-glow" initial={{ opacity: 0.9 }} animate={{ opacity: 0 }} transition={{ duration: 1.4 }} />
       )}

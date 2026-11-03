@@ -25,6 +25,7 @@ import { itemVariants, Stagger } from "../components/motion";
 import { Avatar, Empty, Phone, Pill, SkeletonRows, useToast } from "../components/ui";
 import { fmtRelative } from "../format";
 import { usePoll } from "../hooks";
+import { getCanonicalLocations } from "../helperTaxonomy";
 import type { HelperDetail } from "../types";
 
 export default function Helpers() {
@@ -92,26 +93,12 @@ export default function Helpers() {
   }, [filterOpts, helpers]);
 
   const availableLocations = useMemo(() => {
-    const isCleanLocation = (loc?: string) => {
-      if (!loc || loc.length < 2) return false;
-      if (loc.includes("+")) return false;
-      if (/^\d+-\d+(?:-\d+)?$/.test(loc)) return false;
-      if (/^[\d\s.,+-]+$/.test(loc)) return false;
-      if (/^[0-9a-fA-F]{24}$/.test(loc)) return false;
-      const lower = loc.toLowerCase();
-      if (["telangana", "andhra pradesh", "karnataka", "maharashtra", "bihar", "tamil nadu"].includes(lower)) return false;
-      return true;
-    };
-    if (filterOpts?.locations?.length) {
-      return filterOpts.locations.filter(isCleanLocation);
-    }
     const l = new Set<string>();
     helpers.forEach((h) => {
-      if (h.city && isCleanLocation(h.city)) l.add(h.city);
-      (h.work_areas || []).forEach((a) => isCleanLocation(a) && l.add(a));
+      getCanonicalLocations(h).forEach((loc) => l.add(loc));
     });
     return Array.from(l).sort();
-  }, [filterOpts, helpers]);
+  }, [helpers]);
 
   // Filtered rows
   const filtered = useMemo(() => {
@@ -144,13 +131,9 @@ export default function Helpers() {
         if (!hasService) return false;
       }
 
-      // Location filter
+      // Location filter (Canonical)
       if (selectedLocation) {
-        const target = selectedLocation.toLowerCase();
-        const hasLoc =
-          (h.city && h.city.toLowerCase().includes(target)) ||
-          (h.work_areas || []).some((a) => a.toLowerCase().includes(target) || target.includes(a.toLowerCase()));
-        if (!hasLoc) return false;
+        if (!getCanonicalLocations(h).includes(selectedLocation)) return false;
       }
 
       // Status & Verification filter

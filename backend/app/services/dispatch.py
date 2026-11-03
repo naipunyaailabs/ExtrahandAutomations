@@ -29,11 +29,57 @@ def km_between(lat1, lng1, lat2, lng2) -> float | None:
     return 2 * 6371.0 * math.asin(math.sqrt(a))
 
 
+SERVICE_CLUSTERS = {
+    "electrician": {"electric", "electrician", "electrical", "wiring", "switch", "socket", "fan", "light", "mcb", "fuse", "inverter", "switchboard", "geyser repair"},
+    "plumbing": {"plumb", "plumber", "plumbing", "pipe", "leak", "tap", "faucet", "toilet", "flush", "basin", "drain", "water_tank", "tank", "sanitary"},
+    "cleaning": {"clean", "cleaning", "deep clean", "housekeeping", "house keeping", "dusting", "mop", "sofa", "carpet", "sanitiz", "wash", "kitchen cleaning", "bathroom cleaning", "maid"},
+    "ac_repair": {"ac", "air conditioner", "ac repair", "ac installation", "gas refill", "cooling", "ac service", "hvac", "compressor"},
+    "carpentry": {"carpenter", "carpentry", "wood", "woodwork", "furniture", "assembly", "shelf", "wardrobe", "bed", "door", "window", "lock"},
+    "painting": {"paint", "painting", "painter", "whitewash", "wall", "texture"},
+    "pest_control": {"pest", "pest_control", "termite", "cockroach", "mosquito", "rodent", "bedbug", "fumigation"},
+    "moving": {"pack", "packer", "packers", "mover", "moving", "shifting", "relocation", "loading", "unloading", "transport", "delivery", "logistics"},
+    "gardening": {"garden", "gardening", "lawn", "plant", "tree", "weeding", "mowing", "landscaping"},
+    "cooking": {"cook", "cooking", "chef", "meal", "catering", "tiffin"},
+    "driver": {"driver", "driving", "chauffeur", "cab"},
+    "appliance": {"appliance", "refrigerator", "fridge", "washing machine", "microwave", "oven", "tv repair", "water purifier", "ro repair"},
+}
+
+GENERIC_TAGS = {"other", "general", "none", "service", "task", "all", "works", "helper", ""}
+
+
+def helper_matches_ticket_service(ticket: Ticket, skills: list[str] | None, categories: list[str] | None = None) -> bool:
+    """Strictly verifies that helper's skills or categories match the requested task service."""
+    text = f"{ticket.category or ''} {ticket.title or ''} {ticket.description or ''}".lower()
+    h_tags = [
+        str(s).lower().strip() for s in (skills or []) + (categories or [])
+        if s and str(s).lower().strip() not in GENERIC_TAGS
+    ]
+    if not h_tags:
+        return False
+
+    # 1. Cluster matching (primary: matches trade synonyms like electrician <-> wiring_rewiring)
+    matched_clusters = set()
+    for cluster_name, keywords in SERVICE_CLUSTERS.items():
+        if any(kw in text for kw in keywords):
+            matched_clusters.add(cluster_name)
+            if any(any(kw in tag for kw in keywords) for tag in h_tags):
+                return True
+
+    # 2. Direct keyword / tag matching if ticket is outside standard clusters
+    if not matched_clusters:
+        valid_words = [w for w in text.split() if len(w) > 3 and w not in GENERIC_TAGS]
+        for w in valid_words:
+            if any(w in tag or tag in w for tag in h_tags):
+                return True
+
+    return False
+
+
 def _skill_matches(category: str | None, skills: list[str]) -> bool:
-    if not category or not skills:
-        return True  # nothing to compare - don't exclude
+    if not skills or not category:
+        return False
     c = category.lower()
-    return any(s.lower() in c or c in s.lower() for s in skills)
+    return any(s.lower() in c or c in s.lower() for s in skills if s.lower() not in GENERIC_TAGS)
 
 
 def upsert_helper(db: Session, rec: dict) -> Helper:
@@ -68,38 +114,73 @@ def find_candidates(db: Session, ticket: Ticket) -> tuple[list[dict], str]:
     """Eligible helpers for the ticket's location and service, nearest first."""
     rt = runtime_settings(db)
     src = get_source()
+    raw = []
+    source, trusted = "matching_api", True
     try:
         raw = src.get_candidates(ticket.id, ticket.lat, ticket.lng, rt.match_radius_km)
-        source, trusted = "matching_api", True
     except CandidatesUnavailable as e:
         log.info("Matching API unavailable (%s); using helper list", e)
-        raw = src.list_users(get_settings().extrahand_helper_role)
-        source, trusted = "helper_list", False
+        if db.query(Helper).count() > 20:
+            raw = []
+            source, trusted = "db_cache", False
+        else:
+            raw = src.list_users(get_settings().extrahand_helper_role, max_pages=2)
+            source, trusted = "helper_list", False
 
     out: list[dict] = []
     seen: set[str] = set()
-    for item in raw:
-        rec = normalize_user(item)
-        if not rec["id"] or rec["id"] == "None" or rec["id"] in seen:
-            continue
-        seen.add(rec["id"])
-        upsert_helper(db, rec)
-        if not rec["phone"]:
-            continue
-        dist = rec["distance_km"]
-        if dist is None:
-            dist = km_between(ticket.lat, ticket.lng, rec["lat"], rec["lng"])
-        if not trusted:
-            if not _skill_matches(ticket.category, rec["skills"]):
+
+    if raw:
+        for item in raw:
+            rec = normalize_user(item)
+            if not rec["id"] or rec["id"] == "None" or rec["id"] in seen:
+                continue
+            seen.add(rec["id"])
+            upsert_helper(db, rec)
+            if not rec["phone"]:
+                continue
+            dist = rec["distance_km"]
+            if dist is None:
+                dist = km_between(ticket.lat, ticket.lng, rec["lat"], rec["lng"])
+            # Strict matching on BOTH location AND requested service
+            if not helper_matches_ticket_service(ticket, rec.get("skills"), rec.get("categories")):
                 continue
             if dist is not None and dist > rt.match_radius_km:
                 continue
-            if dist is None and ticket.city and rec["city"] and ticket.city.lower() != rec["city"].lower():
+            if dist is None and ticket.city and rec.get("city"):
+                t_c = ticket.city.strip().lower()
+                h_c = rec["city"].strip().lower()
+                if t_c not in h_c and h_c not in t_c:
+                    continue
+            out.append({
+                "helper_id": rec["id"], "profile_id": rec["profile_id"], "name": rec["name"], "phone": rec["phone"],
+                "skills": rec["skills"], "categories": rec.get("categories", []), "city": rec.get("city"),
+                "distance_km": round(dist, 2) if dist is not None else None,
+            })
+    else:
+        # Load and filter directly from local DB cache
+        for h in db.query(Helper).filter(Helper.phone.isnot(None)).all():
+            if str(h.id) in seen:
                 continue
-        out.append({
-            "helper_id": rec["id"], "profile_id": rec["profile_id"], "name": rec["name"], "phone": rec["phone"],
-            "skills": rec["skills"], "distance_km": round(dist, 2) if dist is not None else None,
-        })
+            seen.add(str(h.id))
+            dist = None
+            if ticket.lat and ticket.lng and h.lat and h.lng:
+                dist = km_between(ticket.lat, ticket.lng, h.lat, h.lng)
+            if not helper_matches_ticket_service(ticket, h.skills, h.categories):
+                continue
+            if dist is not None and dist > rt.match_radius_km:
+                continue
+            if dist is None and ticket.city and h.city:
+                t_c = ticket.city.strip().lower()
+                h_c = h.city.strip().lower()
+                if t_c not in h_c and h_c not in t_c:
+                    continue
+            out.append({
+                "helper_id": h.id, "profile_id": h.profile_id, "name": h.name, "phone": h.phone,
+                "skills": h.skills or [], "categories": h.categories or [], "city": h.city,
+                "distance_km": round(dist, 2) if dist is not None else None,
+            })
+
     out.sort(key=lambda c: (c["distance_km"] is None, c["distance_km"] or 0))
     return out[: rt.max_helpers_per_ticket], source
 

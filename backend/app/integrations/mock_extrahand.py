@@ -8,7 +8,7 @@ import math
 import threading
 from datetime import UTC, datetime, timedelta
 
-from .extrahand import ExtraHandError
+from .extrahand import CandidatesUnavailable, ExtraHandError
 
 CUSTOMERS = [
     ("cust_001", "Ananya Reddy", "9876500001", "ananya@example.com"),
@@ -171,7 +171,10 @@ class MockExtraHand:
         return [copy.deepcopy(h) for h in self.helpers.values() if q in h["name"].lower() or q in h["phone"]][:20]
 
     def get_candidates(self, task_id: str, lat: float | None, lng: float | None, radius_km: float) -> list[dict]:
-        task = self.get_task(task_id)
+        with self._lock:
+            task = self.tasks.get(task_id)
+        if not task:
+            raise CandidatesUnavailable(f"task {task_id} not found in mock store")
         tlng, tlat = task["location"]["coordinates"]
         lat, lng = lat if lat is not None else tlat, lng if lng is not None else tlng
         cat = task["category"]["name"].lower()

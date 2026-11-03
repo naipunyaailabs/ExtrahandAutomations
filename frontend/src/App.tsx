@@ -1,57 +1,109 @@
 import { AnimatePresence, MotionConfig } from "framer-motion";
 import { Route, Routes, useLocation } from "react-router-dom";
 import { api } from "./api";
+import { AgentWorkspace, workspaceFor } from "./components/AgentWorkspace";
 import { ConfigContext, Layout } from "./components/Layout";
 import { PageTransition } from "./components/motion";
 import { SkeletonPage, ToastProvider } from "./components/ui";
+import { AuthProvider, useAuth } from "./context/AuthContext";
 import { usePoll } from "./hooks";
+import CallingPage from "./pages/CallingPage";
 import Calls from "./pages/Calls";
-import CustomerCare from "./pages/CustomerCare";
+import { CustomerFeedbackPage } from "./pages/CustomerFeedback";
 import Dashboard from "./pages/Dashboard";
-import Helpers from "./pages/Helpers";
+import LoginPage from "./pages/Login";
+import { ReportsPage } from "./pages/Reports";
 import Settings from "./pages/Settings";
 import TicketDetail from "./pages/TicketDetail";
-import Tickets from "./pages/Tickets";
+import WhatsAppPage from "./pages/WhatsAppPage";
+import AdvertisementPage from "./pages/AdvertisementPage";
+import type { AppConfig } from "./types";
 
 export default function App() {
   return (
+    <AuthProvider>
+      <AppBody />
+    </AuthProvider>
+  );
+}
+
+function AppBody() {
+  const { user } = useAuth();
+
+  if (!user) {
+    return <LoginPage />;
+  }
+
+  return (
     <MotionConfig reducedMotion="user">
       <ToastProvider>
-        <Shell />
+        <AuthedApp />
       </ToastProvider>
     </MotionConfig>
   );
 }
 
-function Shell() {
-  const { data: config, error } = usePoll(api.config, 30000);
+function AuthedApp() {
+  const { data: config, error } = usePoll<AppConfig>(api.config, 60000);
   const location = useLocation();
 
   if (!config) {
     return (
-      <div className="boot">
-        {error ? <div className="error-note">Cannot reach the backend: {error}. Is it running on port 8000?</div> : <SkeletonPage />}
+      <div style={{ display: "grid", placeItems: "center", minHeight: "100vh" }}>
+        {error ? (
+          <div style={{ color: "var(--danger)", padding: 20 }}>
+            Cannot reach backend: {error}
+          </div>
+        ) : (
+          <SkeletonPage />
+        )}
       </div>
     );
   }
 
+  const workspace = workspaceFor(location.pathname);
+  const pages = (
+    <AnimatePresence mode="wait" initial={false}>
+      <PageTransition key={location.pathname}>
+        <Routes location={location}>
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/feedback" element={<CustomerFeedbackPage />} />
+          <Route path="/engagement" element={<ReportsPage />} />
+          <Route path="/reports" element={<ReportsPage />} />
+          <Route path="/settings" element={<Settings />} />
+          {/* Calling Agent */}
+          <Route path="/calling" element={<CallingPage initialView="dispatch" />} />
+          <Route path="/calling/dispatch" element={<CallingPage initialView="dispatch" />} />
+          <Route path="/calling/console" element={<CallingPage initialView="console" />} />
+          <Route path="/calling/tasks" element={<CallingPage initialView="tickets" />} />
+          <Route path="/calling/helpers" element={<CallingPage initialView="helpers" />} />
+          <Route path="/calling/care" element={<CallingPage initialView="care" />} />
+          <Route path="/calling/history" element={<Calls />} />
+          <Route path="/calls" element={<Calls />} />
+          <Route path="/tickets" element={<CallingPage initialView="tickets" />} />
+          <Route path="/tickets/:id" element={<TicketDetail />} />
+          <Route path="/customer-care" element={<CallingPage initialView="care" />} />
+          <Route path="/helpers" element={<CallingPage initialView="helpers" />} />
+          {/* WhatsApp Agent */}
+          <Route path="/whatsapp" element={<WhatsAppPage section="dispatch" />} />
+          <Route path="/whatsapp/dispatch" element={<WhatsAppPage section="dispatch" />} />
+          <Route path="/whatsapp/overview" element={<WhatsAppPage section="dashboard" />} />
+          <Route path="/whatsapp/dashboard" element={<WhatsAppPage section="dashboard" />} />
+          <Route path="/whatsapp/send" element={<WhatsAppPage section="send" />} />
+          <Route path="/whatsapp/orders" element={<WhatsAppPage section="send" />} />
+          <Route path="/whatsapp/replies" element={<WhatsAppPage section="send" />} />
+          <Route path="/whatsapp/device" element={<WhatsAppPage section="device" />} />
+          {/* Advertisement Engine */}
+          <Route path="/advertisement" element={<AdvertisementPage />} />
+          <Route path="/advestiment" element={<AdvertisementPage />} />
+        </Routes>
+      </PageTransition>
+    </AnimatePresence>
+  );
+
   return (
     <ConfigContext.Provider value={config}>
-      <Layout>
-        <AnimatePresence mode="wait" initial={false}>
-          <PageTransition key={location.pathname}>
-            <Routes location={location}>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/tickets" element={<Tickets />} />
-              <Route path="/tickets/:id" element={<TicketDetail />} />
-              <Route path="/calls" element={<Calls />} />
-              <Route path="/customer-care" element={<CustomerCare />} />
-              <Route path="/helpers" element={<Helpers />} />
-              <Route path="/settings" element={<Settings />} />
-            </Routes>
-          </PageTransition>
-        </AnimatePresence>
-      </Layout>
+      {workspace ? <AgentWorkspace agent={workspace}>{pages}</AgentWorkspace> : <Layout>{pages}</Layout>}
     </ConfigContext.Provider>
   );
 }

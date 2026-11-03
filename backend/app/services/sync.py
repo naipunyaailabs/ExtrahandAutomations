@@ -5,9 +5,10 @@ from datetime import timedelta
 
 from sqlalchemy.orm import Session
 
+from ..config import get_settings
 from ..integrations.extrahand import ExtraHandError, ExtraHandSource, get_source
 from ..integrations.mapping import is_assigned, is_terminal, normalize_task, normalize_user
-from ..models import Customer, DispatchStatus, Helper, Ticket, utcnow
+from ..models import Customer, DispatchStatus, Event, Helper, Ticket, utcnow
 from .common import engine_lock, log_event
 from .dispatch import active_run, cancel_dispatch, upsert_helper
 from .followups import cancel_for_ticket, schedule_for_ticket
@@ -125,6 +126,31 @@ def sync_tickets(db: Session) -> dict:
             log.exception("sync failed for task: %s", e)
 
     last_sync.update(at=utcnow(), ok=True, error=None, stats=stats)
+
+    # Automatically broadcast newly uploaded customer tasks to location + service helpers via WhatsApp
+    try:
+        s = get_settings()
+        if not getattr(s, "whatsapp_simulated", True):
+            from .common import runtime_settings
+            r = runtime_settings(db)
+            if r.auto_dispatch and r.workflow_helper_dispatch_enabled:
+                from whatsapp.agent import get_whatsapp_dispatch_agent
+                unbroadcast = db.query(Ticket).filter(
+                    Ticket.dispatch_status == DispatchStatus.NEW,
+                    Ticket.assignee_id.is_(None)
+                ).all()
+                now = utcnow()
+                for ub in unbroadcast:
+                    target_dt = ub.scheduled_at or ub.created_at
+                    # Compare based on dates: only dispatch tasks scheduled for Today or Upcoming
+                    if not target_dt or target_dt < now - timedelta(hours=2):
+                        continue
+                    already = db.query(Event).filter(Event.ticket_id == ub.id, Event.kind == "whatsapp_agent_broadcast").first()
+                    if not already:
+                        get_whatsapp_dispatch_agent().dispatch_for_task(ub.id)
+    except Exception as e:
+        log.warning("Failed triggering WhatsApp broadcasts after sync: %s", e)
+
     return stats
 
 
@@ -145,6 +171,15 @@ def _sync_one(db: Session, src: ExtraHandSource, raw: dict, stats: dict) -> None
         t = Ticket(id=rec["id"])
         db.add(t)
         stats["new"] += 1
+        log.info(
+            "[ExtraHand Task New] #%s '%s' | Category: %s | Location: %s | Payout: Rs.%s | Customer: %s",
+            rec["id"],
+            rec.get("title", "Task"),
+            rec.get("category", "General"),
+            rec.get("address") or rec.get("city") or "Local",
+            rec.get("budget", 0),
+            rec.get("customer_name") or "Customer",
+        )
     elif rec["remote_updated_at"] != t.remote_updated_at:
         stats["updated"] += 1
 
@@ -192,6 +227,15 @@ def _sync_one(db: Session, src: ExtraHandSource, raw: dict, stats: dict) -> None
                 "is_active": True,
             })
             db.flush()
+        if not prev_assignee and t.assignee_id:
+            stats["assigned"] += 1
+            log.info(
+                "[ExtraHand Assigned] Ticket #%s '%s' assigned to Helper: %s (%s)",
+                t.id,
+                t.title or "Task",
+                t.assignee_name or "Helper",
+                t.assignee_phone or "Phone",
+            )
 
     # --- reconcile local workflow state with ExtraHand -------------------------
     if is_terminal(t.status):
@@ -226,3 +270,9 @@ def _sync_one(db: Session, src: ExtraHandSource, raw: dict, stats: dict) -> None
         schedule_for_ticket(db, t)
     if is_new:
         log_event(db, t.id, "synced", f"New ticket: {t.title or t.id}")
+        if t.dispatch_status == DispatchStatus.NEW and not t.assignee_id:
+            try:
+                from whatsapp.agent import get_whatsapp_dispatch_agent
+                get_whatsapp_dispatch_agent().dispatch_for_task(t.id)
+            except Exception as wa_err:
+                log.warning("WhatsApp dispatch agent trigger failed for new ticket %s: %s", t.id, wa_err)

@@ -127,21 +127,28 @@ class CallAttempt(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     ticket_id: Mapped[str] = mapped_column(ForeignKey("tickets.id"), index=True)
-    purpose: Mapped[str] = mapped_column(String(20))  # dispatch | followup
+    purpose: Mapped[str] = mapped_column(String(20))  # dispatch | followup | feedback | callback
     run_id: Mapped[int | None] = mapped_column(ForeignKey("dispatch_runs.id"))
     followup_id: Mapped[int | None] = mapped_column(ForeignKey("followups.id"))
     helper_id: Mapped[str | None] = mapped_column(String(64))
     helper_name: Mapped[str | None] = mapped_column(String(200))
+    customer_id: Mapped[str | None] = mapped_column(String(64))
+    customer_name: Mapped[str | None] = mapped_column(String(200))
     phone: Mapped[str | None] = mapped_column(String(32))
     provider: Mapped[str] = mapped_column(String(20))
     provider_call_id: Mapped[str | None] = mapped_column(String(64), index=True)
     # queued -> ringing -> in_progress -> ended
     status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
-    # accepted | rejected | no_input | no_answer | busy | failed | confirmed | declined | cancelled
-    outcome: Mapped[str | None] = mapped_column(String(20))
+    # accepted | rejected | no_input | no_answer | busy | failed | confirmed | declined | cancelled | rated | callback_requested
+    outcome: Mapped[str | None] = mapped_column(String(30))
     prompts_played: Mapped[int] = mapped_column(Integer, default=0)
     digits: Mapped[str] = mapped_column(String(50), default="")
     script: Mapped[str | None] = mapped_column(Text)
+    language: Mapped[str | None] = mapped_column(String(20), default="en")  # en | te | hi
+    transcript: Mapped[str | None] = mapped_column(Text)
+    summary: Mapped[str | None] = mapped_column(Text)
+    duration_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    recording_url: Mapped[str | None] = mapped_column(String(500))
     error: Mapped[str | None] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     answered_at: Mapped[datetime | None] = mapped_column(DateTime)
@@ -173,13 +180,68 @@ class Escalation(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     ticket_id: Mapped[str] = mapped_column(ForeignKey("tickets.id"), index=True)
-    reason: Mapped[str] = mapped_column(String(40))  # no_helper_accepted | no_eligible_helpers | helper_cannot_attend | ...
+    reason: Mapped[str] = mapped_column(String(40))  # no_helper_accepted | no_eligible_helpers | helper_cannot_attend | customer_complaint | ...
     details: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(20), default="open", index=True)  # open | in_progress | resolved
     assigned_to: Mapped[str | None] = mapped_column(String(120))
     notes: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class CustomerFeedback(Base):
+    """Customer experience ratings, audio transcripts and complaints for completed bookings."""
+
+    __tablename__ = "customer_feedback"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ticket_id: Mapped[str] = mapped_column(ForeignKey("tickets.id"), index=True)
+    customer_id: Mapped[str | None] = mapped_column(String(64))
+    customer_name: Mapped[str | None] = mapped_column(String(200))
+    customer_phone: Mapped[str | None] = mapped_column(String(32))
+    helper_id: Mapped[str | None] = mapped_column(String(64))
+    helper_name: Mapped[str | None] = mapped_column(String(200))
+
+    rating: Mapped[int | None] = mapped_column(Integer)  # 1 to 5
+    feedback_text: Mapped[str | None] = mapped_column(Text)
+    channel: Mapped[str] = mapped_column(String(20), default="voice")  # voice | whatsapp | web
+    language: Mapped[str] = mapped_column(String(20), default="en")  # en | te | hi
+    sentiment: Mapped[str] = mapped_column(String(20), default="positive")  # positive | neutral | negative
+
+    # Complaints classification
+    complaint_category: Mapped[str] = mapped_column(String(40), default="none")  # none | late_arrival | poor_service | incomplete_work | overcharging | rude_behavior | other
+    complaint_details: Mapped[str | None] = mapped_column(Text)
+    resolution_status: Mapped[str] = mapped_column(String(20), default="resolved")  # new | in_progress | resolved | escalated
+    assigned_agent: Mapped[str | None] = mapped_column(String(120))
+    resolution_notes: Mapped[str | None] = mapped_column(Text)
+
+    # Callbacks
+    callback_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    callback_scheduled_at: Mapped[datetime | None] = mapped_column(DateTime)
+    callback_completed: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    call_attempt_id: Mapped[int | None] = mapped_column(ForeignKey("call_attempts.id"))
+    call_duration_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    audio_recording_url: Mapped[str | None] = mapped_column(String(500))
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class AuditLog(Base):
+    """System-wide operational actions audit log for compliance & security."""
+
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_name: Mapped[str] = mapped_column(String(100), default="system")
+    user_role: Mapped[str] = mapped_column(String(50), default="admin")
+    action: Mapped[str] = mapped_column(String(100))  # e.g., manual_assignment, emergency_stop, resolve_complaint
+    target_type: Mapped[str] = mapped_column(String(50))  # ticket | helper | call | settings | feedback
+    target_id: Mapped[str | None] = mapped_column(String(64))
+    details: Mapped[str | None] = mapped_column(Text)
+    ip_address: Mapped[str | None] = mapped_column(String(50))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class Event(Base):
@@ -201,3 +263,4 @@ class AppSetting(Base):
 
     key: Mapped[str] = mapped_column(String(80), primary_key=True)
     value: Mapped[str] = mapped_column(Text)
+

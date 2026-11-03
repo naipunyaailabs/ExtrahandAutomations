@@ -190,3 +190,55 @@ CREATE TABLE IF NOT EXISTS public.events (
 
 CREATE INDEX IF NOT EXISTS ix_events_ticket_id ON public.events(ticket_id);
 CREATE INDEX IF NOT EXISTS ix_events_created_at ON public.events(created_at);
+
+-- 10. CUSTOMER FEEDBACK TABLE
+-- Post-service voice call & WhatsApp customer feedback and complaint tracking
+CREATE TABLE IF NOT EXISTS public.customer_feedback (
+    id SERIAL PRIMARY KEY,
+    ticket_id VARCHAR(64) NOT NULL REFERENCES public.tickets(id) ON DELETE CASCADE,
+    customer_id VARCHAR(64),
+    customer_name VARCHAR(200),
+    customer_phone VARCHAR(32),
+    helper_id VARCHAR(64),
+    helper_name VARCHAR(200),
+    rating INTEGER,                                 -- 1 to 5 stars
+    feedback_text TEXT,
+    channel VARCHAR(20) NOT NULL DEFAULT 'voice',   -- 'voice', 'whatsapp', 'web'
+    language VARCHAR(20) NOT NULL DEFAULT 'en',     -- 'en', 'te', 'hi'
+    sentiment VARCHAR(20) NOT NULL DEFAULT 'positive', -- 'positive', 'neutral', 'negative'
+    complaint_category VARCHAR(40) NOT NULL DEFAULT 'none', -- 'none', 'late_arrival', 'poor_service', 'incomplete_work', etc.
+    complaint_details TEXT,
+    resolution_status VARCHAR(20) NOT NULL DEFAULT 'resolved', -- 'new', 'in_progress', 'resolved'
+    assigned_agent VARCHAR(120),
+    resolution_notes TEXT,
+    callback_requested BOOLEAN NOT NULL DEFAULT FALSE,
+    callback_scheduled_at TIMESTAMP WITHOUT TIME ZONE,
+    callback_completed BOOLEAN NOT NULL DEFAULT FALSE,
+    call_attempt_id INTEGER REFERENCES public.call_attempts(id) ON DELETE SET NULL,
+    call_duration_seconds INTEGER NOT NULL DEFAULT 0,
+    audio_recording_url VARCHAR(500),
+    created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT (NOW() AT TIME ZONE 'UTC'),
+    resolved_at TIMESTAMP WITHOUT TIME ZONE
+);
+
+CREATE INDEX IF NOT EXISTS ix_customer_feedback_ticket_id ON public.customer_feedback(ticket_id);
+CREATE INDEX IF NOT EXISTS ix_customer_feedback_rating ON public.customer_feedback(rating);
+CREATE INDEX IF NOT EXISTS ix_customer_feedback_complaint ON public.customer_feedback(complaint_category);
+
+-- 11. AUDIT LOGS TABLE
+-- Security compliance and operational audit trails
+CREATE TABLE IF NOT EXISTS public.audit_logs (
+    id SERIAL PRIMARY KEY,
+    user_name VARCHAR(100) NOT NULL DEFAULT 'system',
+    user_role VARCHAR(50) NOT NULL DEFAULT 'admin',
+    action VARCHAR(100) NOT NULL,
+    target_type VARCHAR(50) NOT NULL,
+    target_id VARCHAR(64),
+    details TEXT,
+    ip_address VARCHAR(50),
+    created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT (NOW() AT TIME ZONE 'UTC')
+);
+
+CREATE INDEX IF NOT EXISTS ix_audit_logs_created_at ON public.audit_logs(created_at);
+CREATE INDEX IF NOT EXISTS ix_audit_logs_action ON public.audit_logs(action);
+
