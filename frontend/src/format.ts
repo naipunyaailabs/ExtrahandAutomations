@@ -1,3 +1,5 @@
+import { money } from "./branding";
+
 const dateTime = new Intl.DateTimeFormat("en-IN", {
   day: "numeric", month: "short", hour: "numeric", minute: "2-digit",
 });
@@ -22,8 +24,7 @@ export const fmtTime = (iso: string | null | undefined) => {
   }
 };
 
-export const fmtMoney = (n: number | null | undefined) =>
-  n == null ? "—" : `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
+export const fmtMoney = (n: number | null | undefined) => money(n);
 
 export function fmtRelative(iso: string | null | undefined): string {
   if (!iso) return "—";

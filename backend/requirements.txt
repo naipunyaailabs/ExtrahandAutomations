@@ -4,4 +4,5 @@ sqlalchemy>=2.0
 psycopg2-binary>=2.9.10
 pydantic-settings>=2.4
 httpx>=0.27
+pillow>=10  # poster agent: places the official logo on every poster
 python-multipart>=0.0.9

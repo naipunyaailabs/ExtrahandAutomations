@@ -3,44 +3,6 @@
 from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
-UserTier = Literal["diamond", "gold", "silver"]
-
-
-class UserSegmentItem(BaseModel):
-    """Customer profile segregated by monthly and weekly task volume tiers."""
-    customer_id: str
-    name: str
-    phone: str
-    email: Optional[str] = None
-    city: str = "Bengaluru"
-    total_tasks: int = 0
-    monthly_tasks: int = 0
-    weekly_tasks: int = 0
-    monthly_tier: UserTier = "silver"
-    weekly_tier: UserTier = "silver"
-    top_category: str = "General"
-    last_active: Optional[str] = None
-    preferred_days: List[str] = Field(default_factory=list)
-
-
-class TierCountSummary(BaseModel):
-    """Volume count and percentage for a specific period."""
-    diamond: int = 0
-    gold: int = 0
-    silver: int = 0
-    total: int = 0
-    diamond_pct: float = 0.0
-    gold_pct: float = 0.0
-    silver_pct: float = 0.0
-
-
-class UserSegmentationSummary(BaseModel):
-    """Full segmentation summary across Monthly (30+ / 10-30 / <10) and Weekly (5+ / 3-5 / <3)."""
-    monthly: TierCountSummary
-    weekly: TierCountSummary
-    users: List[UserSegmentItem] = Field(default_factory=list)
-    criteria: Dict[str, Any] = Field(default_factory=dict)
-
 
 class OperationalPerformanceKPIs(BaseModel):
     """Core metrics matching the Reports & Analytics Operational Performance card."""
@@ -54,6 +16,65 @@ class OperationalPerformanceKPIs(BaseModel):
     accepted_dispatches: int = Field(default=0, description="Total helper acceptances")
 
 
+class DashboardOrderItem(BaseModel):
+    """One of today's orders (a Work booked or scheduled today, India time)."""
+    id: str
+    title: str = "Service Work"
+    category: str = "General"
+    status: str = "open"
+    state_type: Literal["success", "fail", "pending"] = "pending"
+    customer_name: str = "Unknown"
+    customer_phone: str = ""
+    city: str = ""
+    area: str = ""
+    scheduled_at: Optional[str] = None
+    scheduled_slot: str = ""
+    created_at: Optional[str] = None
+    budget: float = 0.0
+    booking_source: str = ""
+    posted_by: str = ""
+    helper_name: str = ""
+
+
+class SupportSummary(BaseModel):
+    """Customer-care tickets from ExtraHand (available=False when the support API cannot be read)."""
+    available: bool = False
+    reason: Optional[str] = None
+    total: int = 0
+    open: int = 0
+    by_status: Dict[str, int] = Field(default_factory=dict)
+
+
+class EngagementDashboardSummary(BaseModel):
+    """User Engagement dashboard for today (India time)."""
+    today: str = Field(description="Today's date, YYYY-MM-DD (IST)")
+    today_label: str = Field(description="Today's date for display, e.g. Friday, 06 November 2026")
+    timezone: str = "IST (UTC+05:30)"
+    source: Literal["live", "local"] = Field(description="live = ExtraHand Main Admin API, local = database copy")
+    source_note: str = ""
+    fetched_at: str = Field(description="When the data was read (ISO, IST)")
+    refresh_seconds: int = 300
+    total_users: int = Field(default=0, description="Registered customers")
+    new_users_today: Optional[int] = Field(default=None, description="Customers who registered today")
+    new_users_month: Optional[int] = Field(default=None, description="Customers who registered this month")
+    active_users_month: int = Field(default=0, description="Customers with a Work booked or scheduled this month")
+    active_users_today: int = Field(default=0, description="Customers with a Work booked or scheduled today")
+    total_orders_all_time: int = 0
+    today_orders_count: int = Field(default=0, description="Works booked or scheduled today")
+    today_success: int = 0
+    today_fail: int = 0
+    today_pending: int = 0
+    monthly_orders_count: int = 0
+    monthly_success: int = 0
+    monthly_fail: int = 0
+    monthly_pending: int = 0
+    today_orders: List[DashboardOrderItem] = Field(default_factory=list)
+    categories_breakdown: Dict[str, int] = Field(default_factory=dict)
+    booking_sources: Dict[str, int] = Field(default_factory=dict)
+    support: SupportSummary = Field(default_factory=SupportSummary)
+    excluded: Dict[str, Any] = Field(default_factory=dict, description="What was left out: team-posted and test data")
+
+
 class EngagementOverview(BaseModel):
     """Comprehensive User Engagement payload."""
     kpis: OperationalPerformanceKPIs
@@ -61,5 +82,3 @@ class EngagementOverview(BaseModel):
     calls_summary: Dict[str, Any] = Field(default_factory=dict)
     csat_summary: Dict[str, Any] = Field(default_factory=dict)
     cost_summary: Dict[str, Any] = Field(default_factory=dict)
-    segmentation: Optional[UserSegmentationSummary] = None
-

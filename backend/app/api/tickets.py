@@ -38,9 +38,9 @@ def create_ticket(payload: CreateTicketPayload, db: Session = Depends(get_db)):
         category=payload.category,
         city=payload.city,
         address=payload.address or payload.city,
-        customer_name=payload.customer_name or "Valued Customer",
-        customer_phone=payload.customer_phone or "+919876543210",
-        budget=payload.budget or 500,
+        customer_name=payload.customer_name,
+        customer_phone=payload.customer_phone,
+        budget=payload.budget,
         scheduled_at=payload.scheduled_at or utcnow(),
         dispatch_status=DispatchStatus.NEW,
         status="open",
@@ -69,9 +69,16 @@ def list_tickets(
     status: str | None = None,
     q: str | None = None,
     order: str = "desc",
+    real_only: bool = True,
     db: Session = Depends(get_db),
 ):
+    """Tickets, by default only real customers' (the same set the dashboards count: no Works posted by the
+    ExtraHand team, no test accounts, no mock rows). real_only=false lists every row in the local copy."""
     query = db.query(Ticket)
+    if real_only:
+        from ..services.dispatch_flow import real_customer_ticket_ids
+
+        query = query.filter(Ticket.id.in_(real_customer_ticket_ids(db)))
     if dispatch_status:
         query = query.filter(Ticket.dispatch_status.in_(dispatch_status.split(",")))
     if status:

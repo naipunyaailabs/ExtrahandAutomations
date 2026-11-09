@@ -19,6 +19,7 @@ import type {
   Stats,
   Ticket,
   TicketDetail,
+  CallingFlow,
 } from "../types";
 
 export function createCallingService(
@@ -45,6 +46,8 @@ export function createCallingService(
     ticket: (id: string) => get<TicketDetail>(`/api/tickets/${encodeURIComponent(id)}`),
     dispatch: (id: string) => post(`/api/tickets/${encodeURIComponent(id)}/dispatch`),
     cancelDispatch: (id: string) => post(`/api/tickets/${encodeURIComponent(id)}/dispatch/cancel`),
+    /** Today's Calling Agent pipeline from real data (real-customer orders, calls, follow-ups, escalations). */
+    flow: () => get<CallingFlow>("/api/calls/flow"),
     calls: (activeOrLimit?: boolean | number) => {
       if (typeof activeOrLimit === "boolean") {
         return get<Call[]>(`/api/calls${activeOrLimit ? "?active=true" : ""}`);

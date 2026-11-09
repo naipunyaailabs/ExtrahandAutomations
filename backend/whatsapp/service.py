@@ -3,6 +3,7 @@ import logging
 from typing import Optional
 from sqlalchemy.orm import Session
 
+from app.branding import task_link
 from app.config import get_settings
 from app.database import SessionLocal, session_scope
 from app.models import Ticket, Helper, DispatchStatus
@@ -21,23 +22,21 @@ class WhatsAppDispatchService:
 
     def format_task_dispatch_message(self, payload: WhatsAppDispatchPayload) -> str:
         helper_greeting = f"Hi {payload.helper_name}!" if payload.helper_name else "Hello!"
-        base_url = self.settings.cors_origins.split(",")[0].strip()
-        app_url = f"{base_url}/tickets/{payload.ticket_id}"
+        app_url = task_link(payload.ticket_id)
         return (
             f"🔔 *New {payload.task_title} Task in Your Area - {self.settings.company_name}*\n\n"
             f"{helper_greeting} A new job is available in your location matching your verified skills:\n\n"
             f"📋 *Service Task:* {payload.task_title}\n"
             f"📍 *Location:* {payload.location}\n"
             f"⏰ *Schedule:* {payload.scheduled_time}\n"
-            f"💰 *Payout:* ₹{payload.payout} {self.settings.currency_word}\n\n"
+            f"💰 *Payout:* {self.settings.currency_symbol}{payload.payout} {self.settings.currency_word}\n\n"
             f"📲 *View Task & Accept:*\n{app_url}\n\n"
             f"_Reference Ticket ID: #{payload.ticket_id}_"
         )
 
     def format_task_assigned_message(self, payload: WhatsAppDispatchPayload) -> str:
         helper_greeting = f"Hi {payload.helper_name}!" if payload.helper_name else "Hello!"
-        base_url = self.settings.cors_origins.split(",")[0].strip()
-        app_url = f"{base_url}/tickets/{payload.ticket_id}"
+        app_url = task_link(payload.ticket_id)
         return (
             f"🎉 *Task Assigned - Work Order Confirmed*\n\n"
             f"{helper_greeting} You got this work on {self.settings.company_name}!\n\n"
@@ -100,7 +99,7 @@ class WhatsAppDispatchService:
             from app.services.common import runtime_settings
 
             rt = runtime_settings(db)
-            effective_radius = radius_km if radius_km is not None else (rt.match_radius_km or 10.0)
+            effective_radius = radius_km if radius_km is not None else (rt.match_radius_km or self.settings.match_radius_km)
 
             # 1. Fetch matching candidates using core dispatch logic
             candidates_list, _ = find_candidates(db, ticket)

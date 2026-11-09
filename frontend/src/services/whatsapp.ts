@@ -6,10 +6,15 @@
  */
 
 import type {
+  BulkMessageRequest,
+  BulkMessageResponse,
+  ParseContactsResponse,
   TaskLocationCandidates,
   WhatsAppBroadcastResult,
+  WhatsAppChannelControls,
   WhatsAppSendResult,
   WhatsAppStatus,
+  WhatsAppFlow,
   WhatsAppTemplate,
 } from "../types";
 
@@ -22,6 +27,8 @@ export function createWhatsAppService(
 
   return {
     status: () => get<WhatsAppStatus>("/api/whatsapp/status"),
+    /** Today's WhatsApp dispatch pipeline from real data (real-customer orders, real / simulated / failed sends). */
+    flow: () => get<WhatsAppFlow>("/api/whatsapp/flow"),
     qr: () =>
       get<{ session_id?: string; qr?: string; status?: string; simulated?: boolean; message?: string; error?: string }>(
         "/api/whatsapp/qr"
@@ -58,6 +65,15 @@ export function createWhatsAppService(
       ),
     broadcastTask: (ticketId: string, radiusKm?: number) =>
       post<WhatsAppBroadcastResult>("/api/whatsapp/broadcast-task", { ticket_id: ticketId, radius_km: radiusKm }),
+    parseContacts: (file: File) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      return post<ParseContactsResponse>("/api/whatsapp/parse-contacts", formData);
+    },
+    sendBulk: (payload: BulkMessageRequest) => post<BulkMessageResponse>("/api/whatsapp/send-bulk", payload),
+    channelControls: () => get<WhatsAppChannelControls>("/api/whatsapp/channel-controls"),
+    toggleChannel: (payload: { automation_active?: boolean; bulk_active?: boolean }) =>
+      post<WhatsAppChannelControls>("/api/whatsapp/channel-controls", payload),
     simulateReply: (from: string, body: string) =>
       post<{ status: string; result?: unknown }>("/api/whatsapp/webhook", {
         event: "message.received",

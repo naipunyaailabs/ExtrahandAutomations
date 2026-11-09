@@ -35,7 +35,7 @@ CLOSING_LINES = {
     "rejected": "Okay, thank you for your time. Goodbye.",
     "confirmed": "Thank you for confirming. Goodbye.",
     "declined": "Thank you for letting us know. Our support team will contact you. Goodbye.",
-    "rating_5": "Thank you for the 5-star rating! We are glad you had a wonderful experience with ExtraHand. Goodbye.",
+    "rating_5": "Thank you for the 5-star rating! We are glad you had a wonderful experience with {company}. Goodbye.",
     "rating_4": "Thank you for your 4-star rating! We appreciate your valuable feedback. Goodbye.",
     "rating_3": "Thank you for your rating. We will work hard to make your next experience even better. Goodbye.",
     "rating_2": "We apologize that your experience was not up to expectations. A support executive will follow up with you. Goodbye.",
@@ -123,7 +123,7 @@ def press(db: Session, attempt: CallAttempt, digit: str) -> Step:
         outcome = DIGIT_OUTCOMES[attempt.purpose].get(digit)
         if outcome:
             finish(db, attempt, outcome)
-            return Step(CLOSING_LINES[outcome], hangup=True)
+            return Step(CLOSING_LINES[outcome].replace("{company}", get_settings().company_name), hangup=True)
         return Step("Sorry, that is not a valid option.", repeat=True)
 
 

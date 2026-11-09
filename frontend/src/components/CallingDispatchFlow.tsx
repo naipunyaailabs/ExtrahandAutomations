@@ -10,9 +10,10 @@ import {
   Ticket,
   UserCheck,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AnimatedNumber } from "./motion";
-import type { Call, Escalation, Stats, Ticket as TicketType } from "../types";
+import type { Call, CallingFlow, Escalation, Stats, Ticket as TicketType } from "../types";
+import { api } from "../api";
 
 export interface CallingDispatchFlowProps {
   tickets?: TicketType[];
@@ -45,107 +46,59 @@ export function CallingDispatchFlow({
 }: CallingDispatchFlowProps) {
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
 
-  // Compute live dynamic counts
-  const metrics = useMemo(() => {
-    const list = tickets ?? [];
-    const callsList = calls ?? [];
-    const escList = escalations ?? [];
-
-    const now = new Date();
-    const isToday = (dateStr?: string | null) => {
-      if (!dateStr) return false;
-      const d = new Date(dateStr);
-      if (isNaN(d.getTime())) return false;
-      return (
-        d.getDate() === now.getDate() &&
-        d.getMonth() === now.getMonth() &&
-        d.getFullYear() === now.getFullYear()
-      );
-    };
-
-    // 1. Tasks count (today)
-    const todayTickets = list.filter((t) => isToday(t.scheduled_at) || isToday(t.created_at));
-    const tasksTodayCount =
-      todayTickets.length > 0
-        ? todayTickets.length
-        : list.length > 0
-        ? list.length
-        : stats?.tickets_total ?? 0;
-
-    // 2. Direct Assigned count
-    const directAssignedTickets = list.filter(
-      (t) => Boolean(t.assignee) && t.dispatch_status !== "dispatching"
-    );
-    const assignedCount =
-      directAssignedTickets.length > 0
-        ? directAssignedTickets.length
-        : stats?.assigned_tickets ?? 0;
-
-    // 3. Unassigned count
-    const unassignedTickets = list.filter((t) => !t.assignee);
-    const unassignedCount =
-      unassignedTickets.length > 0
-        ? unassignedTickets.length
-        : stats?.unassigned_tickets ?? Math.max(0, tasksTodayCount - assignedCount);
-
-    // 4. Calls count
-    const dispatchCalls = callsList.filter((c) => c.purpose === "dispatch" || !c.purpose);
-    const totalCallsCount =
-      dispatchCalls.length > 0
-        ? dispatchCalls.length
-        : callsList.length > 0
-        ? callsList.length
-        : stats?.calls_24h ?? 0;
-
-    const activeCallsCount = callsList.filter((c) => c.status !== "ended").length;
-
-    // 5. Assigned OK count (accepted via IVR Voice Call)
-    const acceptedCalls = callsList.filter(
-      (c) =>
-        c.outcome === "accepted" ||
-        c.outcome === "confirmed" ||
-        c.digits === "1" ||
-        (c.outcome && c.outcome.includes("accept"))
-    );
-    const assignedOkCount =
-      acceptedCalls.length > 0
-        ? acceptedCalls.length
-        : list.filter((t) => t.dispatch_status === "assigned" && Boolean(t.assignee)).length;
-
-    // 6. Failed & sent to customer care
-    const customerCareCount =
-      escList.length > 0 ? escList.length : stats?.open_escalations ?? 0;
-
-    // 7. Follow-up calls SEPARATED:
-    // 7A: Direct Assigned Follow-ups
-    const directWithFollowup = directAssignedTickets.filter((t) => Boolean(t.next_followup));
-    const directFollowupsCount =
-      directWithFollowup.length > 0
-        ? directWithFollowup.length
-        : Math.max(1, Math.min(assignedCount, Math.round((stats?.followups_scheduled ?? 3) * 0.6)));
-
-    // 7B: Calling Agent Assigned Follow-ups
-    const callingWithFollowup = list.filter(
-      (t) => t.dispatch_status === "assigned" && Boolean(t.active_call || t.next_followup)
-    );
-    const callingFollowupsCount =
-      callingWithFollowup.length > 0
-        ? callingWithFollowup.length
-        : Math.max(1, (stats?.followups_scheduled ?? 3) - directFollowupsCount || 2);
-
-    return {
-      tasksTodayCount,
-      totalVolume: list.length || stats?.tickets_total || tasksTodayCount,
-      assignedCount,
-      unassignedCount,
-      totalCallsCount,
-      activeCallsCount,
-      assignedOkCount,
-      customerCareCount,
-      directFollowupsCount,
-      callingFollowupsCount,
+  // Today's real numbers from the backend (real-customer orders live from ExtraHand + this app's calls,
+  // follow-ups and escalations). Nothing is estimated: a 0 means nothing happened today.
+  const [flow, setFlow] = useState<CallingFlow | null>(null);
+  useEffect(() => {
+    let stop = false;
+    const load = () =>
+      api.calling
+        .flow()
+        .then((f) => !stop && setFlow(f))
+        .catch(() => undefined);
+    load();
+    const timer = setInterval(load, 60_000);
+    return () => {
+      stop = true;
+      clearInterval(timer);
     };
   }, [tickets, calls, stats, escalations]);
+
+  // "1 completed · 2 in progress · 1 cancelled" (only the parts that are not zero)
+  const progressText = (p?: { completed: number; in_progress: number; cancelled: number }) => {
+    if (!p) return "—";
+    const parts = [
+      p.completed ? `${p.completed} completed` : "",
+      p.in_progress ? `${p.in_progress} in progress` : "",
+      p.cancelled ? `${p.cancelled} cancelled` : "",
+    ].filter(Boolean);
+    return parts.join(" · ") || "none";
+  };
+
+  const metrics = useMemo(
+    () => ({
+      tasksTodayCount: flow?.tasks_today ?? 0,
+      totalVolume: (flow?.total_orders ?? 0).toLocaleString("en-IN"),
+      sourceLabel: !flow ? "Loading…" : flow.source === "live" ? "Live ExtraHand · real customers" : "Local copy (ExtraHand offline)",
+      assignedCount: flow?.assigned_today ?? 0,
+      unassignedCount: flow?.unassigned_today ?? 0,
+      cancelledToday: flow?.cancelled_today ?? 0,
+      todayProgress: progressText(flow?.today_progress),
+      assignedProgress: progressText(flow?.assigned_progress),
+      unassignedProgress: progressText(flow?.unassigned_progress),
+      totalCallsCount: flow?.dispatch_calls_today ?? 0,
+      callsToday: flow?.calls_today ?? 0,
+      simulatedCalls: flow?.simulated_calls_today ?? 0,
+      activeCallsCount: flow?.active_calls ?? 0,
+      assignedOkCount: flow?.accepted_today ?? 0,
+      customerCareCount: flow?.open_escalations ?? 0,
+      escalatedToday: flow?.escalated_today ?? 0,
+      directFollowupsCount: flow?.followups_due_today ?? 0,
+      followupsDone: flow?.followups_done_today ?? 0,
+      callingFollowupsCount: flow?.followup_calls_today ?? 0,
+    }),
+    [flow]
+  );
 
   const handleNodeClick = (nodeKey: string, filterType: any) => {
     setSelectedNode(nodeKey);
@@ -295,9 +248,9 @@ export function CallingDispatchFlow({
               </div>
               <div className="node-name-primary">Tasks (Today)</div>
               <div className="node-desc-sub">
-                Total Volume: <b>{metrics.totalVolume}</b>
+                {metrics.todayProgress}
               </div>
-              <div className="node-footer-hint">Direct vs Outreach</div>
+              <div className="node-footer-hint">{metrics.sourceLabel}</div>
             </motion.div>
 
             {/* COLUMN 2: TRIAGE */}
@@ -318,8 +271,8 @@ export function CallingDispatchFlow({
               <div className="node-num-val green">
                 <AnimatedNumber value={metrics.assignedCount} />
               </div>
-              <div className="node-name-primary">Direct Assigned</div>
-              <div className="node-desc-sub">Pre-allocated Partner</div>
+              <div className="node-name-primary">Helper Assigned</div>
+              <div className="node-desc-sub">{metrics.assignedProgress}</div>
               <div className="node-footer-hint direct">Direct ➔ Follow-up</div>
             </motion.div>
 
@@ -340,8 +293,8 @@ export function CallingDispatchFlow({
               <div className="node-num-val amber">
                 <AnimatedNumber value={metrics.unassignedCount} />
               </div>
-              <div className="node-name-primary">Unassigned Tasks</div>
-              <div className="node-desc-sub">Awaiting Helper Cascade</div>
+              <div className="node-name-primary">Not Assigned</div>
+              <div className="node-desc-sub">{metrics.unassignedProgress}</div>
               <div className="node-footer-hint amber">Queue for Voice IVR</div>
             </motion.div>
 
@@ -363,8 +316,8 @@ export function CallingDispatchFlow({
               <div className="node-num-val green">
                 <AnimatedNumber value={metrics.directFollowupsCount} />
               </div>
-              <div className="node-name-primary">Direct Follow-up Calls</div>
-              <div className="node-desc-sub">Pre-Service Reminders (60m/30m)</div>
+              <div className="node-name-primary">Follow-ups Due Today</div>
+              <div className="node-desc-sub">For today's tasks · {metrics.followupsDone} done</div>
               <div className="node-footer-hint direct">Partner Arrival Verification</div>
             </motion.div>
 
@@ -396,7 +349,7 @@ export function CallingDispatchFlow({
                 <span className="sub-num-unit">Calls</span>
               </div>
 
-              <div className="node-name-primary">Location &amp; Service IVR Calls</div>
+              <div className="node-name-primary">Helper Dispatch Calls Today</div>
               <div className="ivr-script-box">
                 <p className="ivr-script-text">
                   Voice IVR prompt played to helpers:
@@ -433,8 +386,8 @@ export function CallingDispatchFlow({
               <div className="node-num-val emerald">
                 <AnimatedNumber value={metrics.assignedOkCount} />
               </div>
-              <div className="node-name-primary">Assigned OK</div>
-              <div className="node-desc-sub">Accepted on Call (Key 1)</div>
+              <div className="node-name-primary">Accepted on Call Today</div>
+              <div className="node-desc-sub">Helper pressed 1 to accept</div>
               <div className="node-footer-hint emerald">Auto-Allocated ➔ Follow-up</div>
             </motion.div>
 
@@ -455,8 +408,8 @@ export function CallingDispatchFlow({
               <div className="node-num-val rose">
                 <AnimatedNumber value={metrics.customerCareCount} />
               </div>
-              <div className="node-name-primary">Customer Care</div>
-              <div className="node-desc-sub">Not Assigned (Key 0 / Timeout)</div>
+              <div className="node-name-primary">Customer Care (Open)</div>
+              <div className="node-desc-sub">Open escalations · {metrics.escalatedToday} new today</div>
               <div className="node-footer-hint rose">Manual Helper Redispatch</div>
             </motion.div>
 
@@ -478,8 +431,8 @@ export function CallingDispatchFlow({
               <div className="node-num-val purple">
                 <AnimatedNumber value={metrics.callingFollowupsCount} />
               </div>
-              <div className="node-name-primary">Calling Follow-ups</div>
-              <div className="node-desc-sub">For Dispatched Helpers</div>
+              <div className="node-name-primary">Follow-up Calls Today</div>
+              <div className="node-desc-sub">Calls made to helpers today</div>
               <div className="node-footer-hint purple">Automated Job Check Call</div>
             </motion.div>
           </div>
@@ -506,7 +459,7 @@ export function CallingDispatchFlow({
           title="Click to filter direct assigned"
         >
           <span className="metric-dot green" />
-          <span className="metric-label">Direct Assigned:</span>
+          <span className="metric-label">Assigned:</span>
           <span className="metric-val">
             <AnimatedNumber value={metrics.assignedCount} />
           </span>
@@ -530,7 +483,7 @@ export function CallingDispatchFlow({
           title="Click to filter unassigned tasks"
         >
           <span className="metric-dot amber" />
-          <span className="metric-label">Unassigned:</span>
+          <span className="metric-label">Not Assigned:</span>
           <span className="metric-val">
             <AnimatedNumber value={metrics.unassignedCount} />
           </span>

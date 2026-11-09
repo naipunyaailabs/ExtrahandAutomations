@@ -92,6 +92,8 @@ export interface Ticket {
   // date comparison & categorization
   date_status?: "today" | "upcoming" | "past" | "unscheduled";
   is_today?: boolean;
+  /** When the customer booked on ExtraHand (created_at is when the row was copied locally). */
+  booked_at?: string | null;
   is_upcoming?: boolean;
   is_past?: boolean;
   days_from_today?: number | null;
@@ -177,7 +179,22 @@ export interface AppConfig {
   whatsapp_enabled?: boolean;
   whatsapp_gateway_url?: string;
   whatsapp_simulated?: boolean;
+  branding: Branding;
   runtime: RuntimeSettings;
+}
+
+/** Brand and locale values served by the backend (/api/config and /api/public-config). */
+export interface Branding {
+  company_name: string;
+  website_url: string;
+  logo_url: string;
+  booking_url: string;
+  offers_url: string;
+  task_url_template: string;
+  bulk_message_template: string;
+  default_country_code: string;
+  currency_code: string;
+  currency_symbol: string;
 }
 
 export interface WhatsAppStatus {
@@ -190,6 +207,13 @@ export interface WhatsAppStatus {
   messages_today?: number;
   messages_total?: number;
   delivery_rate?: string;
+  automation_active?: boolean;
+  bulk_active?: boolean;
+}
+
+export interface WhatsAppChannelControls {
+  automation_active: boolean;
+  bulk_active: boolean;
 }
 
 export interface WhatsAppSendResult {
@@ -263,49 +287,55 @@ export interface CustomerFeedback {
   updated_at: string;
 }
 
-export type UserTier = "diamond" | "gold" | "silver";
-
-export interface UserSegmentItem {
-  customer_id: string;
-  name: string;
-  phone: string;
-  email?: string | null;
+/** One of today's orders (a Work booked or scheduled today, India time). */
+export interface DashboardOrderItem {
+  id: string;
+  title: string;
+  category: string;
+  status: string;
+  state_type: "success" | "fail" | "pending";
+  customer_name: string;
+  customer_phone: string;
   city: string;
-  total_tasks: number;
-  monthly_tasks: number;
-  weekly_tasks: number;
-  monthly_tier: UserTier;
-  weekly_tier: UserTier;
-  top_category: string;
-  last_active?: string | null;
+  area: string;
+  scheduled_at: string | null;
+  scheduled_slot: string;
+  created_at: string | null;
+  budget: number;
+  booking_source: string;
+  posted_by: string;
+  helper_name: string;
 }
 
-export interface TierCountSummary {
-  diamond: number;
-  gold: number;
-  silver: number;
-  total: number;
-  diamond_pct: number;
-  gold_pct: number;
-  silver_pct: number;
-}
-
-export interface UserSegmentationSummary {
-  monthly: TierCountSummary;
-  weekly: TierCountSummary;
-  users: UserSegmentItem[];
-  criteria: {
-    monthly: {
-      diamond: string;
-      gold: string;
-      silver: string;
-    };
-    weekly: {
-      diamond: string;
-      gold: string;
-      silver: string;
-    };
-  };
+/** User Engagement dashboard for today (backend/user_engagement, live from ExtraHand). */
+export interface EngagementDashboardSummary {
+  today: string;
+  today_label: string;
+  timezone: string;
+  source: "live" | "local";
+  source_note: string;
+  fetched_at: string;
+  refresh_seconds: number;
+  total_users: number;
+  new_users_today: number | null;
+  new_users_month: number | null;
+  active_users_month: number;
+  active_users_today: number;
+  total_orders_all_time: number;
+  today_orders_count: number;
+  today_success: number;
+  today_fail: number;
+  today_pending: number;
+  monthly_orders_count: number;
+  monthly_success: number;
+  monthly_fail: number;
+  monthly_pending: number;
+  today_orders: DashboardOrderItem[];
+  categories_breakdown: Record<string, number>;
+  booking_sources: Record<string, number>;
+  support: { available: boolean; reason?: string | null; total: number; open: number; by_status: Record<string, number> };
+  /** Left out so only real customers are counted: Works posted by the ExtraHand team and test accounts. */
+  excluded?: { team_posted_works?: number; test_account_works?: number; test_accounts?: number; test_account_names?: string[] };
 }
 
 export interface ReportsSummary {
@@ -356,6 +386,59 @@ export interface WhatsAppTemplate {
   language: string;
   template: string;
   variables: string[];
+}
+
+export interface BulkRecipient {
+  phone: string;
+  name?: string;
+  custom_vars?: Record<string, string>;
+}
+
+export interface BulkMessageRequest {
+  recipients: BulkRecipient[];
+  message: string;
+  template_id?: string;
+  variables?: Record<string, string>;
+  channel?: string;
+}
+
+export interface BulkMessageItemResult {
+  phone: string;
+  name?: string;
+  status: "sent" | "simulated" | "failed";
+  message_id?: string;
+  error?: string;
+}
+
+export interface BulkMessageResponse {
+  ok: boolean;
+  total: number;
+  sent_count: number;
+  failed_count: number;
+  simulated_count: number;
+  results: BulkMessageItemResult[];
+  timestamp?: string;
+}
+
+export interface ParsedContact {
+  phone: string;
+  name?: string | null;
+  is_valid: boolean;
+  formatted_phone: string;
+  original_phone: string;
+  row: number;
+  reason?: string | null;
+}
+
+export interface ParseContactsResponse {
+  total_rows: number;
+  valid_count: number;
+  invalid_count: number;
+  detected_phone_column?: string | null;
+  detected_name_column?: string | null;
+  detected_columns: string[];
+  contacts: ParsedContact[];
+  filename?: string | null;
 }
 
 
@@ -422,7 +505,72 @@ export interface CityEvent {
   suggested_discount: number;
   discount_code: string;
   promo_template: string;
+  knowledge?: FestivalKnowledge;
   source: string;
+  status?: string;
+  importance_score?: number;
+  importance_reason?: string;
+  event_scope?: "local" | "regional" | "national" | string;
+  source_url?: string;
+  source_name?: string;
+  is_verified?: boolean;
+  confidence_score?: number;
+  poster_url?: string;
+  poster_theme?: string;
+  poster_generated_at?: string;
+  admin_notes?: string;
+  published_at?: string;
+  discovery_date?: string;
+}
+
+export interface PosterInfo {
+  id: string;
+  event_id: string;
+  event_title: string;
+  city: string;
+  date_str: string;
+  poster_url: string;
+  poster_svg?: string;
+  theme?: string;
+  status: "generated" | "published" | string;
+  created_at?: string;
+  /** Design used for this poster: colours, icon, photo (`image`), `variant` number and `source` ("ai" | "preset"). */
+  palette?: Record<string, any> | null;
+}
+
+/** All-India festival finder (GPT-OSS-20B agent reading Drik Panchang); results wait for admin approval. */
+export interface FestivalFinderStatus {
+  configured: boolean;
+  running: boolean;
+  step: string;
+  model: string;
+  source: string;
+  verify_source: string;
+  window: string[];
+  every_months: number;
+  last_run: { status: string; summary: string; found: number; saved: number; ran_at: string; period: string } | null;
+  next_due: string | null;
+  due: boolean;
+}
+
+/** Poster agent scan of this month and the next two (Seedream 5.0 Flash artwork). */
+export interface PosterScanStatus {
+  running: boolean;
+  step: string;
+  done: number;
+  total: number;
+  last: { summary: string; made: number; failed: number; ran_at: string } | null;
+  window_start: string;
+  window_end: string;
+  waiting: number;
+  image_model: string;
+}
+
+/** Poster agent progress for one event. */
+export interface PosterAgentStatus {
+  status: "running" | "ready" | "failed" | "none" | "missing" | "awaiting_approval";
+  poster_url?: string;
+  error?: string;
 }
 
 export interface CitySummary {
@@ -433,49 +581,149 @@ export interface CitySummary {
   top_demand_service: string;
   featured_discount: string;
   is_national: boolean;
-  data_sources?: string[];
+  /** "national" (All-India), "state" or "city" */
+  region_type?: "national" | "state" | "union_territory" | "city";
   events?: CityEvent[];
 }
 
-export interface CrawlSourceTelemetry {
-  url: string;
-  status: string;
-  http_status: number;
-  detected_headline?: string | null;
-  events_found: number;
-  scanned_at: string;
+/** Optional festival profile the poster agent designs from. */
+/** Agent 1 (Festival Research & Prompt Generator) output: structured festival details + image prompt for Agent 2. */
+export interface FestivalKnowledge {
+  summary?: string;
+  religion?: string;
+  significance?: string;
+  greeting?: string;
+  figures?: string[];
+  rituals?: string[];
+  symbols?: string[];
+  colors?: string[];
+  attire?: string[];
+  foods?: string[];
+  places?: string[];
+  regions?: string[];
+  imagery_do?: string[];
+  imagery_avoid?: string[];
+  image_prompt?: string;
+  model?: string;
+  learned_at?: string;
 }
 
-export interface ScanResultResponse {
-  ok: boolean;
+/** User Engagement > Category: real customers of a month grouped by orders placed. */
+export type CustomerTierKey = "diamond" | "gold" | "platinum" | "silver";
+
+export interface CustomerTier {
+  key: CustomerTierKey;
+  label: string;
+  min_orders: number;
+  max_orders: number | null;
+  range: string;
+  count: number;
+  percent: number;
+}
+
+export interface CategorisedCustomer {
+  customer_key: string;
+  name: string;
+  phone: string;
+  area: string;
   city: string;
-  sources_crawled: CrawlSourceTelemetry[];
-  events_discovered: CityEvent[];
-  summary: string;
+  orders: number;
+  completed: number;
+  cancelled: number;
+  pending: number;
+  spent: number;
+  last_order_at: string | null;
+  tier: CustomerTierKey | null;
+  top_service: string;
+  services: string[];
+  lifetime_orders: number;
 }
 
-export interface AdTemplateResponse {
-  ok: boolean;
-  event_id: string;
-  city: string;
-  discount_percent: number;
-  discount_code: string;
-  promo_template: string;
-  headline: string;
-  call_to_action: string;
-  source: string;
+export interface CustomerCategories {
+  month: string;
+  month_label: string;
+  is_current_month: boolean;
+  months: { value: string; label: string }[];
+  tiers: CustomerTier[];
+  customers: CategorisedCustomer[];
+  active_customers: number;
+  registered_customers: number;
+  orders_in_month: number;
+  source: "live" | "local";
+  fetched_at: string;
+  source_note: string;
 }
 
-export interface AdBroadcastResult {
-  ok: boolean;
-  event_id: string;
-  city: string;
-  channel: string;
-  target_audience: string;
-  customers_reached: number;
-  delivered_count: number;
-  failed_count: number;
-  discount_code: string;
-  summary: string;
+/** One page of Silver customers (registered, no order in the month). */
+export interface SilverCustomerPage {
+  available: boolean;
+  reason?: string;
+  month?: string;
+  customers: {
+    customer_key: string;
+    name: string;
+    phone: string;
+    area: string;
+    city: string;
+    joined_at: string | null;
+    lifetime_orders: number;
+    last_order_at: string | null;
+    status: string;
+  }[];
+  page: number;
+  pages: number;
+  registered?: number;
 }
 
+/** Today's dispatch pipeline (backend app/services/dispatch_flow.py): real-customer orders + channel activity. */
+interface DispatchFlowBase {
+  today: string;
+  source: "live" | "local";
+  fetched_at: string;
+  source_note: string;
+  tasks_today: number;
+  total_orders: number;
+}
+
+export interface WhatsAppFlow extends DispatchFlowBase {
+  open_today: number;
+  eligible_helpers: number;
+  helper_pool: number;
+  sent_today: number;
+  sent_total: number;
+  simulated_today: number;
+  simulated_total: number;
+  failed_today: number;
+  failed_total: number;
+  in_progress_today: number;
+  completed_today: number;
+  delivery_tracking: boolean;
+}
+
+/** How a group of today's tasks stands right now. */
+export interface TaskProgress {
+  completed: number;
+  in_progress: number;
+  cancelled: number;
+}
+
+export interface CallingFlow extends DispatchFlowBase {
+  assigned_today: number;
+  unassigned_today: number;
+  assigned_progress: TaskProgress;
+  unassigned_progress: TaskProgress;
+  today_progress: TaskProgress;
+  followups_cancelled_today: number;
+  cancelled_today: number;
+  calls_today: number;
+  real_calls_today: number;
+  simulated_calls_today: number;
+  dispatch_calls_today: number;
+  accepted_today: number;
+  followup_calls_today: number;
+  followups_due_today: number;
+  followups_done_today: number;
+  active_calls: number;
+  open_escalations: number;
+  escalated_today: number;
+}

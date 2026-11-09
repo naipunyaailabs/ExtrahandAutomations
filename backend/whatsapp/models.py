@@ -23,11 +23,72 @@ class WhatsAppDispatchPayload(BaseModel):
 
 
 class WhatsAppMessageResponse(BaseModel):
-    success: bool
+    success: bool = True
     message_id: Optional[str] = None
-    status: str
+    status: str = "sent"
     error: Optional[str] = None
+    details: Optional[str] = None
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+class BulkRecipient(BaseModel):
+    phone: str
+    name: Optional[str] = None
+    custom_vars: Optional[Dict[str, str]] = Field(default_factory=dict)
+
+
+class BulkMessageRequest(BaseModel):
+    recipients: List[BulkRecipient]
+    message: str
+    template_id: Optional[str] = None
+    variables: Optional[Dict[str, str]] = Field(default_factory=dict)
+    channel: Optional[str] = "whatsapp"
+
+
+class BulkMessageItemResult(BaseModel):
+    phone: str
+    name: Optional[str] = None
+    status: str = "sent"  # "sent", "simulated", "failed"
+    message_id: Optional[str] = None
+    error: Optional[str] = None
+
+
+class BulkMessageResponse(BaseModel):
+    ok: bool = True
+    total: int = 0
+    sent_count: int = 0
+    failed_count: int = 0
+    simulated_count: int = 0
+    results: List[BulkMessageItemResult] = Field(default_factory=list)
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ParsedContact(BaseModel):
+    phone: str
+    name: Optional[str] = None
+    is_valid: bool = True
+    formatted_phone: str
+    original_phone: str
+    row: int = 1
+    reason: Optional[str] = None
+
+
+class ParseContactsResponse(BaseModel):
+    total_rows: int = 0
+    valid_count: int = 0
+    invalid_count: int = 0
+    detected_phone_column: Optional[str] = None
+    detected_name_column: Optional[str] = None
+    detected_columns: List[str] = Field(default_factory=list)
+    contacts: List[ParsedContact] = Field(default_factory=list)
+    filename: Optional[str] = None
+
+
+class SendTemplatePayload(BaseModel):
+    to: str
+    template_id: str
+    variables: Optional[Dict[str, str]] = Field(default_factory=dict)
+    ticket_id: Optional[str] = None
 
 
 class OpenWAWebhookMessage(BaseModel):

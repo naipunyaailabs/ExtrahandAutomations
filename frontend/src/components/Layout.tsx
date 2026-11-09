@@ -43,7 +43,14 @@ export function Layout({ children }: { children: ReactNode }) {
               <span className={`dot pulse ${stats.last_sync.ok ? "success" : "danger"}`} />
               Last sync {fmtRelative(stats.last_sync.at)}
               {!stats.last_sync.ok && stats.last_sync.error && (
-                <span className="error-inline"> · {stats.last_sync.error}</span>
+                <span className="error-inline" title={stats.last_sync.error}>
+                  {" "}·{" "}
+                  {stats.last_sync.error.includes("version") || stats.last_sync.error.includes("No matching document")
+                    ? "Temporary server collision (retrying automatically)"
+                    : stats.last_sync.error.length > 60
+                    ? `${stats.last_sync.error.slice(0, 60)}...`
+                    : stats.last_sync.error}
+                </span>
               )}
             </>
           ) : (

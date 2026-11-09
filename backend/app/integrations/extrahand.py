@@ -2,6 +2,7 @@
 
 import logging
 import threading
+import time
 from typing import Any, Protocol
 
 import httpx
@@ -48,26 +49,42 @@ class LiveExtraHandClient:
     def _login(self) -> str:
         if not (self.s.extrahand_email and self.s.extrahand_password):
             raise ExtraHandError("EXTRAHAND_EMAIL / EXTRAHAND_PASSWORD are not set")
-        try:
-            r = self._http.post(
-                f"{self.s.extrahand_main_base_url}/auth/login",
-                json={
-                    "email": self.s.extrahand_email,
-                    "password": self.s.extrahand_password,
-                    "dashboardType": self.s.extrahand_dashboard_type,
-                },
-            )
-        except (httpx.TimeoutException, OSError) as e:
-            raise ExtraHandError(f"ExtraHand live server connection timed out: {e}") from e
-        except Exception as e:
-            raise ExtraHandError(f"ExtraHand live server connection error: {e}") from e
 
-        if r.status_code >= 400:
-            raise ExtraHandError(f"Login failed ({r.status_code}): {r.text[:300]}")
-        token = (((r.json() or {}).get("data") or {}).get("tokens") or {}).get("accessToken")
-        if not token:
-            raise ExtraHandError("Login response has no data.tokens.accessToken")
-        return token
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            try:
+                r = self._http.post(
+                    f"{self.s.extrahand_main_base_url}/auth/login",
+                    json={
+                        "email": self.s.extrahand_email,
+                        "password": self.s.extrahand_password,
+                        "dashboardType": self.s.extrahand_dashboard_type,
+                    },
+                )
+            except (httpx.TimeoutException, OSError) as e:
+                if attempt < max_attempts:
+                    time.sleep(1.0)
+                    continue
+                raise ExtraHandError(f"ExtraHand live server connection timed out: {e}") from e
+            except Exception as e:
+                raise ExtraHandError(f"ExtraHand live server connection error: {e}") from e
+
+            # ExtraHand remote MongoDB has an optimistic concurrency collision when 2 logins happen at once:
+            # "No matching document found for id ... version ... modifiedPaths 'lastLoginAt, loginCount...'"
+            if r.status_code == 401 and ("version" in r.text or "No matching document" in r.text):
+                if attempt < max_attempts:
+                    log.warning("ExtraHand login version collision (attempt %d/%d). Retrying...", attempt, max_attempts)
+                    time.sleep(1.2 * attempt)
+                    continue
+
+            if r.status_code >= 400:
+                raise ExtraHandError(f"Login failed ({r.status_code}): {r.text[:300]}")
+            token = (((r.json() or {}).get("data") or {}).get("tokens") or {}).get("accessToken")
+            if not token:
+                raise ExtraHandError("Login response has no data.tokens.accessToken")
+            return token
+
+        raise ExtraHandError("ExtraHand login failed after retries")
 
     def _token_value(self, refresh: bool = False) -> str:
         with self._lock:
@@ -159,12 +176,17 @@ class ResilientExtraHandSource:
 
         self.mock = MockExtraHand()
         self._fallback_active = False
+        self.s_allow_mock = get_settings().extrahand_mock_fallback
 
     @property
     def mode(self) -> str:
         return "mock" if self._fallback_active else "live"
 
     def _execute(self, action_name: str, fn_live, fn_mock):
+        if not self.s_allow_mock:
+            # Real data only: never replace live ExtraHand data with mock data (it would be saved as real
+            # tickets / helpers). The caller sees the error and tries again on the next run.
+            return fn_live()
         try:
             res = fn_live()
             if self._fallback_active:

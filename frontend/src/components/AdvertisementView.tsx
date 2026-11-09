@@ -1,1990 +1,1239 @@
 import {
   BarChart3,
-  Bot,
   Calendar as CalendarIcon,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
-  Clock,
+  Edit3,
   ExternalLink,
   Globe,
+  ImageIcon,
   MapPin,
-  MessageSquare,
   PartyPopper,
   Plus,
   RefreshCw,
+  Search,
   Sparkles,
-  Square,
+  Tag,
   Trash2,
-  TrendingUp,
   X,
+  XCircle,
 } from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { AnimatePresence, motion } from "framer-motion";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api } from "../api";
+import { useBranding } from "../branding";
 import { useToast } from "./ui";
-import { FloatingAIAgent } from "./FloatingAIAgent";
-import { FestivalPosterCard } from "./FestivalPosterCard";
-import type { CityEvent, CitySummary, ScanResultResponse } from "../types";
+import { FestivalPosterCard, posterDesign } from "./FestivalPosterCard";
+import type { CityEvent, CitySummary, FestivalFinderStatus, PosterAgentStatus, PosterScanStatus } from "../types";
+
+/*
+ * Advertisement agent UI.
+ *  - Marketing Radar (dashboard): festival and poster metrics.
+ *  - States & Cities: a KPI card for All-India and each city.
+ *  - Region calendar page: click a date to register a festival (name, description, coupon code);
+ *    the poster agent then designs its poster, shown beside the calendar.
+ *  - All-India only: "Find Festivals" reads Drik Panchang, Groq GPT-OSS-20B picks the major festivals,
+ *    and each one waits for the admin to approve (published + poster) or reject it.
+ */
 
 const MONTH_NAMES = [
   "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December"
+  "July", "August", "September", "October", "November", "December",
 ];
-
 const WEEKDAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const REGION_TYPE_LABEL: Record<string, string> = { national: "National", state: "State", union_territory: "UT", city: "City" };
 
-export function AdvertisementView() {
-  const toast = useToast();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const cityParam = searchParams.get("city");
+/** Calendar page of a region (All-India or a city). */
+export const regionCalendarPath = (name: string) => `/advertisement/regions/${encodeURIComponent(name)}`;
 
-  // Navigation View: "dashboard" (KPI cards, charts, city hubs) vs "city_calendar" (70% calendar, 30% day special)
-  const [currentView, setCurrentView] = useState<"dashboard" | "city_calendar">(() =>
-    cityParam ? "city_calendar" : "dashboard"
+const isoDate = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const isNational = (c: CitySummary) => c.is_national || c.region_type === "national";
+const sameName = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+const isPending = (ev: CityEvent) => ev.status === "Pending Review";
+/** Approved festival whose last day is before today: shown greyed out with its poster, no regenerate / edit. */
+const isCompleted = (ev: CityEvent, today: string) => !isPending(ev) && (ev.date_end || ev.date_start || "") < today;
+const coversDate = (ev: CityEvent, date: string) => !!ev.date_start && date >= ev.date_start && date <= (ev.date_end || ev.date_start);
+
+// ---- shared styles ------------------------------------------------------------
+const card: CSSProperties = {
+  background: "#ffffff",
+  border: "1px solid #e2e8f0",
+  borderRadius: "14px",
+  boxShadow: "0 1px 3px rgba(0,0,0,0.03)",
+  boxSizing: "border-box",
+};
+const btnLight: CSSProperties = {
+  display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "12px", fontWeight: 600, padding: "7px 13px",
+  background: "#ffffff", border: "1px solid #cbd5e1", borderRadius: "8px", color: "#334155", cursor: "pointer",
+};
+const btnDark: CSSProperties = { ...btnLight, background: "#0f172a", border: "1px solid #0f172a", color: "#ffffff" };
+const fieldLabel: CSSProperties = { display: "flex", flexDirection: "column", gap: "5px", fontSize: "12px", fontWeight: 600, color: "#0f172a" };
+const field: CSSProperties = {
+  fontSize: "13px", fontWeight: 500, border: "1px solid #cbd5e1", borderRadius: "8px", padding: "8px 11px",
+  color: "#0f172a", background: "#ffffff", fontFamily: "inherit",
+};
+const smallHeading: CSSProperties = { fontSize: "11px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" };
+const emptyBox: CSSProperties = {
+  border: "1px dashed #cbd5e1", background: "#f8fafc", borderRadius: "12px", padding: "20px 16px",
+  textAlign: "center", color: "#64748b", fontSize: "13px", lineHeight: 1.5,
+};
+
+/** Agent 1 → Agent 2 pipeline for one festival: what Agent 1 learnt and the prompt it gave Agent 2. */
+function ResearchPanel({ event, posterReady }: { event: CityEvent; posterReady: boolean }) {
+  const [showPrompt, setShowPrompt] = useState(false);
+  const k = event.knowledge || {};
+  // The full poster prompt Agent 1 wrote for the current poster (saved with the poster's design)
+  const posterPrompt = posterDesign(event).poster_prompt_used || "";
+  const list = (items?: string[]) => (items && items.length ? items.slice(0, 6).join(", ") : "");
+  const rows: [string, string][] = [
+    ["Meaning", k.significance || ""],
+    ["Honours", list(k.figures)],
+    ["Symbols", list(k.symbols)],
+    ["Celebrated at", list(k.places)],
+    ["Greeting", k.greeting || ""],
+    ["Avoid", list(k.imagery_avoid)],
+  ];
+  const step = (label: string, done: boolean, color: string) => (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "11px", fontWeight: 700,
+      color: done ? color : "#94a3b8" }}>
+      {done ? <CheckCircle2 size={12} /> : <RefreshCw size={11} className="spin" />}
+      {label}
+    </span>
   );
+  return (
+    <div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "12px 14px", background: "#f8fafc",
+      display: "flex", flexDirection: "column", gap: "8px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+        {step("Agent 1 · Festival research", true, "#2563eb")}
+        <span style={{ color: "#cbd5e1" }}>→</span>
+        {step("Agent 2 · Poster", posterReady, "#16a34a")}
+        {k.religion && (
+          <span style={{ marginLeft: "auto", fontSize: "11px", fontWeight: 700, color: "#1e40af", background: "#dbeafe",
+            borderRadius: "999px", padding: "2px 9px" }}>
+            {k.religion}
+          </span>
+        )}
+      </div>
+      <div style={{ fontSize: "12.5px", color: "#0f172a", lineHeight: 1.5 }}>{k.summary}</div>
+      <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", columnGap: "10px", rowGap: "3px", fontSize: "12px", lineHeight: 1.45 }}>
+        {rows.filter(([, v]) => v).map(([label, v]) => (
+          <div key={label} style={{ display: "contents" }}>
+            <span style={{ color: "#64748b", fontWeight: 600, whiteSpace: "nowrap" }}>{label}</span>
+            <span style={{ color: label === "Avoid" ? "#b91c1c" : "#334155" }}>{v}</span>
+          </div>
+        ))}
+      </div>
+      {posterPrompt && (
+        <div>
+          <button type="button" onClick={() => setShowPrompt((v) => !v)}
+            style={{ background: "transparent", border: "none", padding: 0, color: "#2563eb", fontSize: "12px", fontWeight: 600, cursor: "pointer" }}>
+            {showPrompt ? "Hide" : "Show"} the poster prompt Agent 1 wrote for Agent 2
+          </button>
+          {showPrompt && (
+            <div style={{ marginTop: "6px", fontSize: "11.5px", color: "#334155", background: "#ffffff", border: "1px solid #e2e8f0",
+              borderRadius: "8px", padding: "8px 10px", lineHeight: 1.5 }}>
+              {posterPrompt}
+            </div>
+          )}
+        </div>
+      )}
+      <div style={{ fontSize: "10.5px", color: "#94a3b8" }}>
+        Researched by {k.model || "the text model"}{k.learned_at ? ` on ${k.learned_at.slice(0, 10)}` : ""}. Check the details before publishing.
+      </div>
+    </div>
+  );
+}
 
+export function AdvertisementView({ mode = "dashboard" }: { mode?: "dashboard" | "regions" }) {
+  const toast = useToast();
+  const branding = useBranding();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const { region: regionParam } = useParams<{ region?: string }>();
+
+  // Older links (?region= / ?city=) open the region's calendar page
+  const legacyRegion = searchParams.get("region") || searchParams.get("city");
+  useEffect(() => {
+    if (legacyRegion && !regionParam) navigate(regionCalendarPath(legacyRegion), { replace: true });
+  }, [legacyRegion, regionParam]);
+
+  const selectedCity = mode === "regions" ? regionParam ?? "" : "";
+  const isIndiaSelected = sameName(selectedCity, "All-India");
+
+  // ---- regions ---------------------------------------------------------------
   const [cities, setCities] = useState<CitySummary[]>([]);
-  const [selectedCity, setSelectedCity] = useState<string>(() => cityParam || "All-India");
   const [loadingCities, setLoadingCities] = useState(false);
-
-  const [events, setEvents] = useState<CityEvent[]>([]);
-  const [loadingEvents, setLoadingEvents] = useState(false);
-
-  // Sync state when URL search param changes (e.g. user clicks sidebar cities)
-  useEffect(() => {
-    if (cityParam) {
-      setSelectedCity(cityParam);
-      setCurrentView("city_calendar");
-    } else {
-      setCurrentView("dashboard");
-    }
-  }, [cityParam]);
-
-  // Selected date string (e.g. "2026-11-08") for the 30% Day Special panel
-  const [selectedDateStr, setSelectedDateStr] = useState<string>("2026-11-08");
-
-  // Add City Modal State (City Name + State + Min 2, Max 5 Data Sources)
-  const [showAddCityModal, setShowAddCityModal] = useState(false);
-  const [newCityName, setNewCityName] = useState("");
-  const [newCityState, setNewCityState] = useState("Telangana");
-  const [newDataSources, setNewDataSources] = useState<string[]>([
-    "https://khammam.telangana.gov.in/",
-    "https://www.ntnews.com/"
-  ]);
-  const [addingCity, setAddingCity] = useState(false);
-
-  // Listen for sidebar "+" click or other triggers
-  useEffect(() => {
-    const handleOpenModal = () => setShowAddCityModal(true);
-    window.addEventListener("open-add-city-modal", handleOpenModal);
-    return () => window.removeEventListener("open-add-city-modal", handleOpenModal);
-  }, []);
-
-  const handleAddSource = () => {
-    if (newDataSources.length < 5) {
-      setNewDataSources((prev) => [...prev, ""]);
-    }
-  };
-
-  const handleRemoveSource = (index: number) => {
-    if (newDataSources.length > 2) {
-      setNewDataSources((prev) => prev.filter((_, i) => i !== index));
-    }
-  };
-
-  const handleSourceChange = (index: number, val: string) => {
-    setNewDataSources((prev) => {
-      const updated = [...prev];
-      updated[index] = val;
-      return updated;
-    });
-  };
-
-  // Month Calendar Navigation State
-  const [calYear, setCalYear] = useState<number>(2026);
-  const [calMonth, setCalMonth] = useState<number>(10); // 10 = November (0-indexed)
-
-  // AI Agent Event Scanner & Crawl Progress Modal
-  const [scanning, setScanning] = useState(false);
-  const [showCrawlModal, setShowCrawlModal] = useState<boolean>(false);
-  const [crawlStep, setCrawlStep] = useState<number>(0);
-  const [scanReport, setScanReport] = useState<ScanResultResponse | null>(null);
-
-  // Multi-City Sequential Process State (One by One City)
-  const ALL_MARKETING_CITIES = useMemo(() => [
-    "Siddipet",
-    "Warangal",
-    "Mahabubnagar",
-    "Karimnagar",
-    "Kalwakurthy",
-    "Nalgonda",
-    "Jadcherla",
-    "Nizamabad",
-    "All-India",
-  ], []);
-
-  const [batchScanning, setBatchScanning] = useState(false);
-  const [currentCityIndex, setCurrentCityIndex] = useState(0);
-  const [currentBatchCity, setCurrentBatchCity] = useState("Siddipet");
-  const stopRequestedRef = useRef(false);
-
-  // Auto-start check when launched with ?start=true
-  useEffect(() => {
-    if (searchParams.get("start") === "true") {
-      setSearchParams((prev) => {
-        const next = new URLSearchParams(prev);
-        next.delete("start");
-        return next;
-      });
-      setTimeout(() => {
-        handleStartProcess();
-      }, 350);
-    }
-  }, [searchParams]);
-
-  // Exact Monitored Data Source URLs for Selected City
-  const selectedCitySources = useMemo<string[]>(() => {
-    const c = cities.find((ci) => ci.city_name.toLowerCase() === selectedCity.toLowerCase());
-    if (c?.data_sources && c.data_sources.length > 0) return c.data_sources;
-    const defaults: Record<string, string[]> = {
-      "Siddipet": [
-        "https://siddipettimes.com/category/latest-news/",
-        "https://siddipet.telangana.gov.in/"
-      ],
-      "Mahabubnagar": [
-        "https://mahabubnagar.telangana.gov.in/",
-        "https://www.mee24news.com/telangana/mahbubnagar"
-      ],
-      "Warangal": [
-        "https://warangal.telangana.gov.in/",
-        "https://www.warangaltimes.com/"
-      ],
-      "Karimnagar": [
-        "https://karimnagar.telangana.gov.in/",
-        "https://www.manamepaper.com/"
-      ],
-      "Kalwakurthy": [
-        "https://nagarkurnool.telangana.gov.in/",
-        "https://www.ntnews.com/"
-      ],
-      "Nalgonda": [
-        "https://nalgonda.telangana.gov.in/",
-        "https://www.manamepaper.com/"
-      ],
-      "Jadcherla": [
-        "https://metronewsupdates.com/",
-        "https://www.manamepaper.com/"
-      ],
-      "Nizamabad": [
-        "https://nizamabad.telangana.gov.in/",
-        "https://epaper.ntnews.com/Home/Index"
-      ],
-      "All-India": [
-        "https://india.gov.in/calendar",
-        "https://pib.gov.in/"
-      ]
-    };
-    return defaults[selectedCity] || [
-      `https://${selectedCity.toLowerCase()}.telangana.gov.in/`,
-      "https://www.ntnews.com/"
-    ];
-  }, [cities, selectedCity]);
-
-// Fetch Cities on Mount
   const fetchCities = async () => {
     setLoadingCities(true);
     try {
-      const data = await api.advestiment.cities();
-      setCities(data);
+      setCities(await api.advestiment.cities());
     } catch (err: unknown) {
-      console.warn("Could not load cities:", err);
+      toast.error("Could not load regions", err instanceof Error ? err.message : "Please try again.");
     } finally {
       setLoadingCities(false);
     }
   };
-
   useEffect(() => {
     fetchCities();
   }, []);
 
-  // Fetch events whenever selectedCity changes
-  const fetchEvents = async (city: string) => {
+  const cityRegions = useMemo(() => cities.filter((c) => !isNational(c)), [cities]);
+  const allEvents = useMemo(() => cities.flatMap((c) => c.events ?? []), [cities]);
+  const stateNames = useMemo(
+    () => Array.from(new Set(cityRegions.map((c) => c.state).filter(Boolean))).sort(),
+    [cityRegions]
+  );
+
+  // ---- calendar --------------------------------------------------------------
+  const todayIso = isoDate(new Date());
+  const [calYear, setCalYear] = useState(() => new Date().getFullYear());
+  const [calMonth, setCalMonth] = useState(() => new Date().getMonth());
+  const [selectedDateStr, setSelectedDateStr] = useState(todayIso);
+  const [events, setEvents] = useState<CityEvent[]>([]);
+  const [loadingEvents, setLoadingEvents] = useState(false);
+
+  const fetchEvents = async (keepDate?: string) => {
+    if (!selectedCity) return;
     setLoadingEvents(true);
     try {
-      const data = await api.advestiment.events(city);
+      const data = await api.advestiment.events(selectedCity, calYear, calMonth + 1);
       setEvents(data);
-      if (data.length > 0) {
-        // Look for event in the currently viewed month
-        const mStr = `-${String(calMonth + 1).padStart(2, "0")}-`;
-        const yStr = `${calYear}-`;
-        const inCurrentMonth = data.find(
-          (e) => (e.date_start?.startsWith(yStr) && e.date_start?.includes(mStr)) || (e.date_end?.startsWith(yStr) && e.date_end?.includes(mStr))
-        );
-        if (inCurrentMonth?.date_start) {
-          setSelectedDateStr(inCurrentMonth.date_start);
-        } else {
-          // If no event in current month, select upcoming event or the first available
-          const todayIso = new Date().toISOString().slice(0, 10);
-          const upcoming = data.find((e) => e.date_start >= todayIso) || data[0];
-          if (upcoming?.date_start) {
-            setSelectedDateStr(upcoming.date_start);
-            const parts = upcoming.date_start.split("-");
-            if (parts.length >= 2) {
-              setCalYear(parseInt(parts[0], 10));
-              setCalMonth(parseInt(parts[1], 10) - 1);
-            }
-          }
-        }
-      }
+      const monthPrefix = `${calYear}-${String(calMonth + 1).padStart(2, "0")}-`;
+      setSelectedDateStr((current) => {
+        if (keepDate) return keepDate;
+        if (current.startsWith(monthPrefix)) return current;
+        return data[0]?.date_start?.startsWith(monthPrefix) ? data[0].date_start : todayIso.startsWith(monthPrefix) ? todayIso : `${monthPrefix}01`;
+      });
     } catch (err: unknown) {
-      console.warn("Could not load city events:", err);
+      toast.error("Could not load the calendar", err instanceof Error ? err.message : "Please try again.");
     } finally {
       setLoadingEvents(false);
     }
   };
-
   useEffect(() => {
-    if (selectedCity) {
-      fetchEvents(selectedCity);
-    }
+    fetchEvents();
+  }, [selectedCity, calYear, calMonth]);
+  useEffect(() => {
+    if (selectedCity) window.scrollTo({ top: 0 });
   }, [selectedCity]);
 
-  // Open dedicated calendar page for a clicked city (or India)
-  const openCityCalendar = (cityName: string) => {
-    setSelectedCity(cityName);
-    setCurrentView("city_calendar");
-    setSearchParams({ city: cityName });
-    fetchEvents(cityName);
+  const shiftMonth = (delta: number) => {
+    const d = new Date(calYear, calMonth + delta, 1);
+    setCalYear(d.getFullYear());
+    setCalMonth(d.getMonth());
+  };
+  const goToday = () => {
+    const now = new Date();
+    setCalYear(now.getFullYear());
+    setCalMonth(now.getMonth());
+    setSelectedDateStr(todayIso);
   };
 
-  // Add a new city with data sources (Min 2, Max 5)
-  const handleAddCity = async (e: React.FormEvent) => {
+  const calendarDays = useMemo(() => {
+    const first = new Date(calYear, calMonth, 1).getDay();
+    const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
+    const daysInPrev = new Date(calYear, calMonth, 0).getDate();
+    const cells: { dayNumber: number; dateStr: string; events: CityEvent[] }[] = [];
+    for (let i = first - 1; i >= 0; i--) cells.push({ dayNumber: daysInPrev - i, dateStr: "", events: [] });
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dateStr = isoDate(new Date(calYear, calMonth, d));
+      cells.push({ dayNumber: d, dateStr, events: events.filter((ev) => coversDate(ev, dateStr)) });
+    }
+    for (let n = 1; cells.length % 7 !== 0; n++) cells.push({ dayNumber: n, dateStr: "", events: [] });
+    return cells;
+  }, [calYear, calMonth, events]);
+
+  // ---- selected day: register / edit / poster -------------------------------
+  const dayEvents = useMemo(() => events.filter((ev) => coversDate(ev, selectedDateStr)), [events, selectedDateStr]);
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const dayEvent = dayEvents.find((e) => e.id === selectedEventId) || dayEvents[0] || null;
+  const dayCompleted = !!dayEvent && isCompleted(dayEvent, todayIso);
+
+  const emptyForm = { title: "", description: "", code: "" };
+  const [form, setForm] = useState(emptyForm);
+  const [formMode, setFormMode] = useState<"closed" | "create" | "edit">("closed");
+  const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  useEffect(() => {
+    setForm(emptyForm);
+    setFormMode("closed");
+  }, [selectedDateStr, selectedCity]);
+
+  const reloadAfterChange = async (date: string) => {
+    await Promise.all([fetchEvents(date), fetchCities()]);
+  };
+
+  const openEdit = (ev: CityEvent) => {
+    setSelectedEventId(ev.id);
+    setForm({ title: ev.title, description: ev.description || "", code: ev.discount_code || "" });
+    setFormMode("edit");
+  };
+
+  const submitForm = async (e: FormEvent) => {
     e.preventDefault();
-    const trimmed = newCityName.trim();
-    if (!trimmed) {
-      toast.error("City Name Required", "Please enter the city name.");
+    const title = form.title.trim();
+    const code = form.code.trim();
+    if (!title || !code) {
+      toast.error("Missing Details", "Event name and coupon code are required.");
       return;
     }
+    const payload = { title, description: form.description.trim(), discount_code: code };
+    setSaving(true);
+    try {
+      const ev =
+        formMode === "edit" && dayEvent
+          ? await api.advestiment.updateRegisteredEvent(dayEvent.id, payload)
+          : await api.advestiment.registerEvent({ city: selectedCity, date: selectedDateStr, ...payload });
+      toast.success(formMode === "edit" ? "Event Updated" : "Event Registered", `${ev.title} · ${ev.date_start}. The poster agent is creating its poster.`);
+      setSelectedEventId(ev.id);
+      setPosterStatus({ status: "running" });
+      await reloadAfterChange(ev.date_start);
+      setForm(emptyForm);
+      setFormMode("closed");
+    } catch (err: unknown) {
+      toast.error("Could not save event", err instanceof Error ? err.message : "Please try again.");
+    } finally {
+      setSaving(false);
+    }
+  };
 
-    const validSources = newDataSources.map((s) => s.trim()).filter((s) => s.length > 0);
-    if (validSources.length < 2) {
-      toast.error("Data Sources Required", "Please provide at least 2 data sources (minimum 2, maximum 5).");
-      return;
+  const deleteEvent = async (ev: CityEvent) => {
+    if (!window.confirm(`Delete "${ev.title}" from ${ev.date_start}?`)) return;
+    setDeletingId(ev.id);
+    try {
+      await api.advestiment.deleteEvent(ev.id);
+      toast.info("Event Deleted", `${ev.title} was removed from the calendar.`);
+      setFormMode("closed");
+      await reloadAfterChange(ev.date_start);
+    } catch (err: unknown) {
+      toast.error("Could not delete event", err instanceof Error ? err.message : "Please try again.");
+    } finally {
+      setDeletingId(null);
     }
-    if (validSources.length > 5) {
-      toast.error("Maximum 5 Sources", "You can specify at most 5 data sources.");
-      return;
-    }
+  };
 
+  // ---- All-India festival finder ------------------------------------------------
+  const [finder, setFinder] = useState<FestivalFinderStatus | null>(null);
+  const [startingFinder, setStartingFinder] = useState(false);
+  const loadFinder = () =>
+    api.advestiment.finderStatus().then(setFinder).catch(() => setFinder(null));
+  useEffect(() => {
+    if (isIndiaSelected) loadFinder();
+  }, [isIndiaSelected]);
+  // While a run is going, poll it; when it ends, refresh the calendar and report the result
+  useEffect(() => {
+    if (!finder?.running) return;
+    const timer = setTimeout(async () => {
+      try {
+        const st = await api.advestiment.finderStatus();
+        setFinder(st);
+        if (!st.running) {
+          await Promise.all([fetchEvents(), fetchCities()]);
+          if (st.last_run) {
+            if (st.last_run.status === "success") toast.success("Festival Search Finished", st.last_run.summary);
+            else toast.error("Festival Search Failed", st.last_run.summary);
+          }
+        }
+      } catch {
+        /* try again on the next tick */
+      }
+    }, 4000);
+    return () => clearTimeout(timer);
+  }, [finder]);
+
+  // ---- Poster agent scan: this month and the next two --------------------------
+  const [scan, setScan] = useState<PosterScanStatus | null>(null);
+  const [startingScan, setStartingScan] = useState(false);
+  const loadScan = () =>
+    api.advestiment.posterScanStatus().then(setScan).catch(() => setScan(null));
+  useEffect(() => {
+    if (selectedCity) loadScan();
+  }, [selectedCity, events]);
+  useEffect(() => {
+    if (!scan?.running) return;
+    const timer = setTimeout(async () => {
+      try {
+        const st = await api.advestiment.posterScanStatus();
+        setScan(st);
+        if (!st.running) {
+          await Promise.all([fetchEvents(), fetchCities()]);
+          if (st.last) toast.success("Posters Ready", st.last.summary);
+        }
+      } catch {
+        /* try again on the next tick */
+      }
+    }, 4000);
+    return () => clearTimeout(timer);
+  }, [scan]);
+
+  const startScan = async () => {
+    setStartingScan(true);
+    try {
+      const st = await api.advestiment.startPosterScan();
+      setScan(st);
+      toast.info(
+        "Poster Agent Started",
+        st.total
+          ? `Creating ${st.total} poster${st.total === 1 ? "" : "s"} for ${st.window_start} to ${st.window_end} with Seedream 5.0 Flash.`
+          : "Checking this month and the next two for festivals without a poster."
+      );
+    } catch (err: unknown) {
+      toast.error("Could not start the poster agent", err instanceof Error ? err.message : "Please try again.");
+      loadScan();
+    } finally {
+      setStartingScan(false);
+    }
+  };
+
+  const startFinder = async () => {
+    setStartingFinder(true);
+    try {
+      setFinder(await api.advestiment.startFinder());
+      toast.info("Festival Search Started", "Reading Drik Panchang and choosing the major festivals. This takes about a minute.");
+    } catch (err: unknown) {
+      toast.error("Could not start the festival search", err instanceof Error ? err.message : "Please try again.");
+      loadFinder();
+    } finally {
+      setStartingFinder(false);
+    }
+  };
+
+  const [decidingId, setDecidingId] = useState<string | null>(null);
+  const decide = async (ev: CityEvent, approve: boolean) => {
+    setDecidingId(ev.id);
+    try {
+      if (approve) {
+        await api.advestiment.approveEvent(ev.id);
+        toast.success("Festival Approved", `${ev.title} is published. The poster agent is creating its poster.`);
+        setPosterStatus({ status: "running" });
+      } else {
+        await api.advestiment.rejectEvent(ev.id);
+        toast.info("Festival Rejected", `${ev.title} was removed and will not be suggested again.`);
+      }
+      await reloadAfterChange(ev.date_start);
+    } catch (err: unknown) {
+      toast.error("Could not save the decision", err instanceof Error ? err.message : "Please try again.");
+    } finally {
+      setDecidingId(null);
+    }
+  };
+
+  // Poster agent progress for the selected event (polled while it is designing)
+  const [posterStatus, setPosterStatus] = useState<PosterAgentStatus | null>(null);
+  const autoStarted = useRef<Set<string>>(new Set());
+  const posterEventId = dayEvent?.id ?? null;
+  useEffect(() => {
+    if (!posterEventId) {
+      setPosterStatus(null);
+      return;
+    }
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const check = async () => {
+      try {
+        let st = await api.advestiment.posterStatus(posterEventId);
+        // Event without a poster: start the poster agent once, automatically
+        if (st.status === "none" && !dayCompleted && !autoStarted.current.has(posterEventId)) {
+          autoStarted.current.add(posterEventId);
+          st = await api.advestiment.restartPosterAgent(posterEventId);
+        }
+        if (stopped) return;
+        setPosterStatus(st);
+        if (st.status === "running") timer = setTimeout(check, 4000);
+        // A regenerate failed but the previous poster is still there: keep showing it and tell the admin why
+        else if (st.status === "failed" && st.poster_url)
+          toast.error("New poster could not be created", `${st.error || "The poster agent failed."} The previous poster is kept.`);
+        // Poster finished: reload the festival when its poster is new (first poster, or a regenerated one with a
+        // new address such as ...poster?v=13), otherwise the page would keep showing the previous poster
+        else if (st.status === "ready" && st.poster_url !== events.find((x) => x.id === posterEventId)?.poster_url)
+          fetchEvents(selectedDateStr);
+      } catch {
+        if (!stopped) timer = setTimeout(check, 8000);
+      }
+    };
+    check();
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [posterEventId, posterStatus?.status === "running"]);
+
+  const retryPoster = async (ev: CityEvent) => {
+    try {
+      setPosterStatus(await api.advestiment.restartPosterAgent(ev.id));
+    } catch (err: unknown) {
+      toast.error("Poster agent did not start", err instanceof Error ? err.message : "Please try again.");
+    }
+  };
+
+  // ---- add city ---------------------------------------------------------------
+  const [showAddCity, setShowAddCity] = useState(false);
+  const [newCity, setNewCity] = useState({ name: "", state: "" });
+  const [addingCity, setAddingCity] = useState(false);
+  const addCity = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!newCity.name.trim() || !newCity.state.trim()) {
+      toast.error("Missing Details", "Enter the city and its state.");
+      return;
+    }
     setAddingCity(true);
     try {
-      const stateToSave = newCityState.trim() || "Telangana";
-      const created = await api.advestiment.addCity(trimmed, stateToSave, validSources);
-      setCities((prev) => [...prev, created]);
-      setSelectedCity(created.city_name);
-      setNewCityName("");
-      setNewCityState("Telangana");
-      setNewDataSources([
-        "District Tourism & Festival Portal",
-        "Regional Daily News & Community Bulletins"
-      ]);
-      setShowAddCityModal(false);
-      window.dispatchEvent(new CustomEvent("city-added", { detail: created }));
-      toast.success(
-        "City Added",
-        `${created.city_name} (${created.state}) saved to database with ${validSources.length} verified data sources!`
-      );
-      openCityCalendar(created.city_name);
+      const created = await api.advestiment.addCity(newCity.name.trim(), newCity.state.trim());
+      toast.success("City Added", `${created.city_name} (${created.state}) now has its own festival calendar.`);
+      setShowAddCity(false);
+      setNewCity({ name: "", state: "" });
+      await fetchCities();
+      navigate(regionCalendarPath(created.city_name));
     } catch (err: unknown) {
-      toast.error("Failed to add city", (err as Error).message);
+      toast.error("Could not add city", err instanceof Error ? err.message : "Please try again.");
     } finally {
       setAddingCity(false);
     }
   };
 
-  // Trigger Autonomous AI Agent across all cities one by one
-  const handleStartProcess = async () => {
-    stopRequestedRef.current = false;
-    setBatchScanning(true);
-    setScanning(true);
-    setShowCrawlModal(true);
-    toast.info("Process Started", "Autonomous Marketing Agent is scanning all cities one by one...");
-
-    for (let i = 0; i < ALL_MARKETING_CITIES.length; i++) {
-      if (stopRequestedRef.current) break;
-      const city = ALL_MARKETING_CITIES[i];
-      setCurrentCityIndex(i);
-      setCurrentBatchCity(city);
-      setSelectedCity(city);
-      setCrawlStep(1);
-
-      await new Promise((r) => setTimeout(r, 600));
-      if (stopRequestedRef.current) break;
-      setCrawlStep(2);
-
-      try {
-        const result = await api.advestiment.scan({
-          city,
-          use_openrouter: true,
-        });
-        if (stopRequestedRef.current) break;
-        setCrawlStep(3);
-        setScanReport(result);
-        await new Promise((r) => setTimeout(r, 600));
-        setCrawlStep(4);
-
-        if (result.events_discovered && result.events_discovered.length > 0) {
-          setEvents(result.events_discovered);
-          setSelectedDateStr(result.events_discovered[0].date_start);
-        }
-
-        toast.success(
-          `Scanned ${city} (${i + 1}/${ALL_MARKETING_CITIES.length})`,
-          `Discovered ${result.events_discovered?.length || 0} festival event(s) & prepared WhatsApp promotions.`
-        );
-      } catch (err: any) {
-        console.warn(`Scan for ${city} warning:`, err);
-      }
-
-      await fetchCities();
-      await new Promise((r) => setTimeout(r, 700));
-    }
-
-    if (stopRequestedRef.current) {
-      toast.warning("Process Stopped", "Autonomous sequential scanning was stopped.");
-    } else {
-      toast.success(
-        "Autonomous Process Completed",
-        `All ${ALL_MARKETING_CITIES.length} cities successfully processed one by one!`
+  // ---- States & Cities grid -----------------------------------------------------
+  const [regionQuery, setRegionQuery] = useState("");
+  const regionGroups = useMemo(() => {
+    const q = regionQuery.trim().toLowerCase();
+    const match = (c: CitySummary) => !q || c.city_name.toLowerCase().includes(q) || (c.state || "").toLowerCase().includes(q);
+    const groups: { title: string; subtitle: string; items: CitySummary[] }[] = [];
+    const national = cities.filter((c) => isNational(c) && match(c));
+    if (national.length) groups.push({ title: "India", subtitle: "National festivals & holidays", items: national });
+    const byState = new Map<string, CitySummary[]>();
+    cityRegions.filter(match).forEach((c) => {
+      const key = c.state || "Other";
+      byState.set(key, [...(byState.get(key) ?? []), c]);
+    });
+    [...byState.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .forEach(([state, items]) =>
+        groups.push({
+          title: state,
+          subtitle: `${items.length} ${items.length === 1 ? "city" : "cities"}`,
+          items: [...items].sort((a, b) => a.city_name.localeCompare(b.city_name)),
+        })
       );
-    }
+    return groups;
+  }, [cities, cityRegions, regionQuery]);
 
-    setBatchScanning(false);
-    setScanning(false);
-  };
+  // ---- dashboard metrics -----------------------------------------------------
+  const monthLabel = `${MONTH_NAMES[new Date().getMonth()]} ${new Date().getFullYear()}`;
+  const postersReady = allEvents.filter((e) => e.poster_url).length;
+  const topDiscount = allEvents.reduce((m, e) => Math.max(m, e.suggested_discount || 0), 0);
+  const upcoming = useMemo(
+    () => [...allEvents].sort((a, b) => a.date_start.localeCompare(b.date_start)).slice(0, 6),
+    [allEvents]
+  );
+  const byRegion = useMemo(
+    () =>
+      cities
+        .map((c) => ({ name: isNational(c) ? "All-India" : c.city_name, count: c.upcoming_events_count }))
+        .filter((r) => r.count > 0)
+        .sort((a, b) => b.count - a.count),
+    [cities]
+  );
+  const maxRegionCount = Math.max(1, ...byRegion.map((r) => r.count));
 
-  const handleStopProcess = () => {
-    stopRequestedRef.current = true;
-    setBatchScanning(false);
-    setScanning(false);
-    toast.warning("Process Stopped", "Autonomous sequential scanning has been halted.");
-  };
+  const regionLabel = isIndiaSelected ? "All-India" : selectedCity;
+  const selectedRegion = cities.find((c) => sameName(c.city_name, selectedCity));
 
-  // Trigger Autonomous AI Agent to sequentially read city news and district websites one by one
-  const handleTriggerScan = async () => {
-    setScanning(true);
-    setShowCrawlModal(true);
-    setCrawlStep(1); // Reading source 1
-
-    const timer1 = setTimeout(() => {
-      if (selectedCitySources.length > 1) {
-        setCrawlStep(2);
-      }
-    }, 850);
-
-    const timer2 = setTimeout(() => {
-      setCrawlStep(3); // Analyzing festival demand & generating WhatsApp promos
-    }, 1700);
-
-    try {
-      const result = await api.advestiment.scan({
-        city: selectedCity,
-        use_openrouter: true,
-      });
-      clearTimeout(timer1);
-      clearTimeout(timer2);
-      setScanReport(result);
-      setCrawlStep(4); // Complete
-      if (result.events_discovered && result.events_discovered.length > 0) {
-        setEvents(result.events_discovered);
-        setSelectedDateStr(result.events_discovered[0].date_start);
-      }
-      toast.success(
-        "Autonomous Crawl Complete",
-        `Read all websites for ${selectedCity}. Discovered ${result.events_discovered.length} event(s) and prepared targeted customer promos.`
-      );
-      fetchCities();
-    } catch (err: unknown) {
-      clearTimeout(timer1);
-      clearTimeout(timer2);
-      toast.error("Scan Failed", (err as Error).message);
-    } finally {
-      setScanning(false);
-    }
-  };
-
-  // Month navigation handlers (Dynamically syncs events & selected date)
-  const handlePrevMonth = () => {
-    let newMonth: number;
-    let newYear = calYear;
-    if (calMonth === 0) {
-      newMonth = 11;
-      newYear = calYear - 1;
-    } else {
-      newMonth = calMonth - 1;
-    }
-    setCalMonth(newMonth);
-    setCalYear(newYear);
-
-    // Auto-select event in the newly selected month if present
-    const mStr = `-${String(newMonth + 1).padStart(2, "0")}-`;
-    const yStr = `${newYear}-`;
-    const inMonth = events.find(
-      (e) => (e.date_start?.startsWith(yStr) && e.date_start?.includes(mStr)) || (e.date_end?.startsWith(yStr) && e.date_end?.includes(mStr))
-    );
-    if (inMonth?.date_start) {
-      setSelectedDateStr(inMonth.date_start);
-    } else {
-      setSelectedDateStr(`${newYear}-${String(newMonth + 1).padStart(2, "0")}-01`);
-    }
-  };
-
-  const handleNextMonth = () => {
-    let newMonth: number;
-    let newYear = calYear;
-    if (calMonth === 11) {
-      newMonth = 0;
-      newYear = calYear + 1;
-    } else {
-      newMonth = calMonth + 1;
-    }
-    setCalMonth(newMonth);
-    setCalYear(newYear);
-
-    // Auto-select event in the newly selected month if present
-    const mStr = `-${String(newMonth + 1).padStart(2, "0")}-`;
-    const yStr = `${newYear}-`;
-    const inMonth = events.find(
-      (e) => (e.date_start?.startsWith(yStr) && e.date_start?.includes(mStr)) || (e.date_end?.startsWith(yStr) && e.date_end?.includes(mStr))
-    );
-    if (inMonth?.date_start) {
-      setSelectedDateStr(inMonth.date_start);
-    } else {
-      setSelectedDateStr(`${newYear}-${String(newMonth + 1).padStart(2, "0")}-01`);
-    }
-  };
-
-  const handleToday = () => {
-    const now = new Date();
-    const y = now.getFullYear();
-    const m = now.getMonth();
-    setCalYear(y);
-    setCalMonth(m);
-    const mm = String(m + 1).padStart(2, "0");
-    const dd = String(now.getDate()).padStart(2, "0");
-    setSelectedDateStr(`${y}-${mm}-${dd}`);
-  };
-
-
-  // Generate calendar days matrix
-  const calendarDays = useMemo(() => {
-    const firstDayOfMonth = new Date(calYear, calMonth, 1).getDay();
-    const daysInCurrentMonth = new Date(calYear, calMonth + 1, 0).getDate();
-    const daysInPrevMonth = new Date(calYear, calMonth, 0).getDate();
-
-    const days = [];
-
-    // Leading days from previous month
-    for (let i = firstDayOfMonth - 1; i >= 0; i--) {
-      days.push({
-        dayNumber: daysInPrevMonth - i,
-        isCurrentMonth: false,
-        dateStr: "",
-        events: [] as CityEvent[]
-      });
-    }
-
-    // Days in current month
-    for (let d = 1; d <= daysInCurrentMonth; d++) {
-      const mm = String(calMonth + 1).padStart(2, "0");
-      const dd = String(d).padStart(2, "0");
-      const dateStr = `${calYear}-${mm}-${dd}`;
-
-      // Find events that span this date
-      const matchedEvents = events.filter((ev) => {
-        if (!ev.date_start) return false;
-        const start = ev.date_start;
-        const end = ev.date_end || ev.date_start;
-        return dateStr >= start && dateStr <= end;
-      });
-
-      days.push({
-        dayNumber: d,
-        isCurrentMonth: true,
-        dateStr,
-        events: matchedEvents
-      });
-    }
-
-    // Trailing days to fill the final week
-    const totalCells = Math.ceil(days.length / 7) * 7;
-    let nextMonthDay = 1;
-    while (days.length < totalCells) {
-      days.push({
-        dayNumber: nextMonthDay++,
-        isCurrentMonth: false,
-        dateStr: "",
-        events: [] as CityEvent[]
-      });
-    }
-
-    return days;
-  }, [calYear, calMonth, events]);
-
-  // Find the event corresponding to the selected date
-  const daySpecialEvent = useMemo(() => {
-    return events.find((ev) => {
-      if (!ev.date_start) return false;
-      const start = ev.date_start;
-      const end = ev.date_end || ev.date_start;
-      return selectedDateStr >= start && selectedDateStr <= end;
-    }) || null;
-  }, [events, selectedDateStr]);
-
-  // Common Overall India National Card
-  const indiaCard = useMemo(() => {
-    return cities.find((c) => c.is_national || c.city_name === "All-India") || {
-      city_name: "All-India",
-      state: "National Festivals & Public Events",
-      active_campaigns: 26,
-      upcoming_events_count: 26,
-      top_demand_service: "Deep Cleaning & Painting",
-      featured_discount: "Up to 30% OFF",
-      is_national: true,
-      events: []
-    };
-  }, [cities]);
-
-  // Regional City Cards (Telangana hubs)
-  const regionalCityCards = useMemo(() => {
-    return cities.filter((c) => !c.is_national && c.city_name !== "All-India");
-  }, [cities]);
-
-  // Total metrics for Dashboard KPI cards
-  const totalCitiesCount = cities.length > 0 ? cities.length : 9;
-  const totalEventsCount = useMemo(() => {
-    const regionalSum = regionalCityCards.reduce((acc, c) => acc + (c.upcoming_events_count || 0), 0);
-    return regionalSum + (indiaCard.upcoming_events_count || 3);
-  }, [regionalCityCards, indiaCard]);
-  const totalAdsSent = 1420;
-
-  const isIndiaSelected = selectedCity.toLowerCase() === "all-india";
-
-  return (
-    <div
-      className="advertisement-container"
-      style={{
-        padding: "0 0 5rem",
-        maxWidth: "1560px",
-        margin: "0 auto",
-        position: "relative",
-        boxSizing: "border-box",
-        background: "#ffffff",
-        color: "#0f172a"
-      }}
+  // ==========================================================================
+  const kpi = (icon: JSX.Element, tint: string, label: string, value: string, sub: string, onClick?: () => void) => (
+    <motion.div
+      whileHover={{ y: -2 }}
+      onClick={onClick}
+      role={onClick ? "link" : undefined}
+      style={{ ...card, borderRadius: "12px", padding: "16px 18px", display: "flex", alignItems: "center", gap: "14px", cursor: onClick ? "pointer" : "default" }}
     >
-      {/* =========================================================================
-          VIEW 1: MARKETING & ADVERTISEMENT DASHBOARD
-          CLEAN, MINIMALIST MODERN SAAS DESIGN
-          ========================================================================= */}
-      {currentView === "dashboard" ? (
+      <div style={{ width: "42px", height: "42px", borderRadius: "10px", background: `${tint}14`, border: `1px solid ${tint}33`, color: tint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+        {icon}
+      </div>
+      <div style={{ minWidth: 0 }}>
+        <span style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em", display: "block" }}>{label}</span>
+        <div style={{ fontSize: "24px", fontWeight: 700, color: "#0f172a", lineHeight: 1.15, marginTop: "2px" }}>{value}</div>
+        <span style={{ fontSize: "11.5px", color: "#64748b", fontWeight: 500, marginTop: "2px", display: "block" }}>{sub}</span>
+      </div>
+    </motion.div>
+  );
+
+  const regionCard = (c: CitySummary) => {
+    const national = isNational(c);
+    const kind = c.region_type || (national ? "national" : "city");
+    return (
+      <motion.button
+        key={c.city_name}
+        type="button"
+        whileHover={{ y: -2 }}
+        whileTap={{ scale: 0.98 }}
+        onClick={() => navigate(regionCalendarPath(c.city_name))}
+        style={{
+          textAlign: "left", padding: "11px 13px", borderRadius: "11px", cursor: "pointer",
+          border: national ? "1px solid #bfdbfe" : "1px solid #e2e8f0", background: national ? "#f8fbff" : "#ffffff",
+          boxShadow: "0 1px 2px rgba(0,0,0,0.03)", display: "flex", flexDirection: "column", gap: "7px", minWidth: 0,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "6px", minWidth: 0 }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: "6px", minWidth: 0 }}>
+            {national ? <Globe size={14} style={{ color: "#2563eb", flexShrink: 0 }} /> : <MapPin size={14} style={{ color: "#64748b", flexShrink: 0 }} />}
+            <span title={c.city_name} style={{ fontSize: "12.5px", fontWeight: 700, color: "#0f172a", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {national ? "India" : c.city_name}
+            </span>
+          </span>
+          <span style={{ fontSize: "10px", fontWeight: 700, color: national ? "#1d4ed8" : "#475569", background: national ? "#dbeafe" : "#f1f5f9", borderRadius: "6px", padding: "1px 6px", flexShrink: 0 }}>
+            {REGION_TYPE_LABEL[kind] ?? kind}
+          </span>
+        </div>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "11.5px", color: "#64748b", fontWeight: 500 }}>
+          <CalendarIcon size={12} />
+          <b style={{ color: "#0f172a" }}>{c.upcoming_events_count}</b> upcoming {c.upcoming_events_count === 1 ? "festival" : "festivals"}
+        </span>
+      </motion.button>
+    );
+  };
+
+  // ---- right panel of the calendar page ----------------------------------------
+  const showPoster =
+    formMode === "closed" && !!dayEvent && !isPending(dayEvent) && !!dayEvent.poster_url && posterStatus?.status !== "running";
+
+  const dayPanel = (
+    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+      {dayEvents.map((ev) => {
+        const selected = dayEvent?.id === ev.id;
+        const done = isCompleted(ev, todayIso);
+        return (
+          <div
+            key={ev.id}
+            onClick={() => setSelectedEventId(ev.id)}
+            style={{
+              border: done ? (selected ? "1.5px solid #94a3b8" : "1px solid #e2e8f0") : isPending(ev) ? (selected ? "1.5px solid #facc15" : "1px solid #fde68a") : selected ? "1.5px solid #86efac" : "1px solid #bbf7d0",
+              background: done ? "#f8fafc" : isPending(ev) ? "#fefce8" : "#f0fdf4", borderRadius: "10px",
+              padding: "10px 12px", display: "flex", gap: "10px", alignItems: "flex-start", cursor: dayEvents.length > 1 ? "pointer" : "default",
+            }}
+          >
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: "13px", fontWeight: 700, color: "#0f172a" }}>{ev.title}</div>
+              {ev.description && (
+                <div style={{ fontSize: "12px", color: "#475569", marginTop: "3px", lineHeight: 1.45, whiteSpace: "pre-wrap" }}>{ev.description}</div>
+              )}
+              <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap", marginTop: "6px" }}>
+                <span style={{ fontSize: "11.5px", fontWeight: 700, letterSpacing: "0.04em", borderRadius: "6px", padding: "2px 8px",
+                  ...(done
+                    ? { color: "#64748b", background: "#f1f5f9", border: "1px dashed #cbd5e1", textDecoration: "line-through" }
+                    : { color: "#15803d", background: "#dcfce7", border: "1px dashed #86efac" }) }}>
+                  {ev.discount_code}
+                </span>
+                {done && (
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "11px", fontWeight: 700, color: "#475569", background: "#e2e8f0", border: "1px solid #cbd5e1", borderRadius: "6px", padding: "2px 8px" }}>
+                    <CheckCircle2 size={11} /> Completed
+                  </span>
+                )}
+                {isPending(ev) && (
+                  <span style={{ fontSize: "11px", fontWeight: 700, color: "#a16207", background: "#fef9c3", border: "1px solid #fde68a", borderRadius: "6px", padding: "2px 8px" }}>
+                    Awaiting approval
+                  </span>
+                )}
+              </div>
+              {ev.source === "drik_panchang" && (
+                <div style={{ fontSize: "11.5px", color: "#64748b", marginTop: "6px", lineHeight: 1.45 }}>
+                  {ev.source_url ? (
+                    <a href={ev.source_url} target="_blank" rel="noreferrer" style={{ color: "#2563eb", fontWeight: 600, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: "3px" }}>
+                      Drik Panchang <ExternalLink size={10} />
+                    </a>
+                  ) : (
+                    "Drik Panchang"
+                  )}
+                  {ev.admin_notes ? ` · ${ev.admin_notes}` : ""}
+                </div>
+              )}
+              {isPending(ev) && (
+                <div style={{ display: "flex", gap: "8px", marginTop: "10px" }}>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      decide(ev, true);
+                    }}
+                    disabled={decidingId === ev.id}
+                    style={{ ...btnDark, background: "#16a34a", border: "1px solid #16a34a", padding: "6px 12px" }}
+                  >
+                    {decidingId === ev.id ? <RefreshCw size={12} className="spin" /> : <CheckCircle2 size={13} />}
+                    Approve
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      decide(ev, false);
+                    }}
+                    disabled={decidingId === ev.id}
+                    style={{ ...btnLight, color: "#dc2626", border: "1px solid #fecaca", padding: "6px 12px" }}
+                  >
+                    <XCircle size={13} />
+                    Reject
+                  </button>
+                </div>
+              )}
+            </div>
+            {!done && <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                openEdit(ev);
+              }}
+              aria-label={`Edit ${ev.title}`}
+              style={{ ...btnLight, padding: "5px 10px", color: "#2563eb", border: "1px solid #bfdbfe", flexShrink: 0 }}
+            >
+              <Edit3 size={12} />
+              Edit
+            </button>}
+          </div>
+        );
+      })}
+
+      {formMode !== "closed" || (dayEvents.length === 0 && selectedDateStr >= todayIso) ? (
+        <form onSubmit={submitForm} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+          {formMode === "edit" && <span style={smallHeading}>Edit event</span>}
+          <label style={fieldLabel}>
+            Event Name
+            <input
+              type="text"
+              value={form.title}
+              onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
+              placeholder="e.g. Diwali Mega Sale"
+              required
+              maxLength={160}
+              style={field}
+            />
+          </label>
+          <label style={fieldLabel}>
+            Description
+            <textarea
+              value={form.description}
+              onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+              placeholder="What is the festival and what offer do customers get?"
+              rows={4}
+              style={{ ...field, resize: "vertical" }}
+            />
+          </label>
+          <label style={fieldLabel}>
+            Coupon Code
+            <input
+              type="text"
+              value={form.code}
+              onChange={(e) => setForm((f) => ({ ...f, code: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "") }))}
+              placeholder="e.g. DIWALI30"
+              required
+              maxLength={40}
+              style={{ ...field, fontWeight: 700, letterSpacing: "0.05em" }}
+            />
+          </label>
+          <div style={{ display: "flex", gap: "8px" }}>
+            {formMode !== "closed" && (
+              <button type="button" onClick={() => setFormMode("closed")} disabled={saving} style={{ ...btnLight, padding: "9px 14px", fontSize: "13px" }}>
+                Cancel
+              </button>
+            )}
+            <button type="submit" disabled={saving} style={{ ...btnDark, flex: 1, justifyContent: "center", padding: "9px 16px", fontSize: "13px", fontWeight: 700, cursor: saving ? "wait" : "pointer" }}>
+              {saving ? <RefreshCw size={13} className="spin" /> : <CheckCircle2 size={14} />}
+              {saving ? "Saving…" : formMode === "edit" ? "Save Changes" : `Submit · Register for ${selectedDateStr}`}
+            </button>
+          </div>
+          {formMode === "edit" && dayEvent && (
+            <button
+              type="button"
+              onClick={() => deleteEvent(dayEvent)}
+              disabled={deletingId === dayEvent.id}
+              style={{ alignSelf: "flex-start", display: "inline-flex", alignItems: "center", gap: "5px", background: "transparent", border: "none", padding: 0, color: "#dc2626", fontSize: "12px", fontWeight: 600, cursor: "pointer" }}
+            >
+              {deletingId === dayEvent.id ? <RefreshCw size={12} className="spin" /> : <Trash2 size={12} />}
+              Delete this event
+            </button>
+          )}
+        </form>
+      ) : dayEvents.length === 0 ? (
+        <div style={emptyBox}>{selectedDateStr} has passed. Pick today or a future date to register a festival.</div>
+      ) : dayEvent && isPending(dayEvent) ? (
+        <div style={{ ...emptyBox, border: "1px dashed #fde68a", background: "#fefce8", color: "#854d0e" }}>
+          <b style={{ display: "block", marginBottom: "4px" }}>Approval needed</b>
+          Approve {dayEvent.title} to publish it; the poster agent then creates its poster. Rejected festivals are removed.
+        </div>
+      ) : showPoster ? null : dayEvent && dayCompleted ? (
+        <div style={emptyBox}>
+          <b style={{ display: "block", marginBottom: "4px" }}>{dayEvent.title} is completed</b>
+          No poster was created for this festival.
+        </div>
+      ) : dayEvent && (posterStatus?.status === "failed" || posterStatus?.status === "none") ? (
+        <div style={posterStatus.status === "failed" ? { ...emptyBox, border: "1px dashed #fecaca", background: "#fef2f2", color: "#991b1b" } : emptyBox}>
+          <b style={{ display: "block", marginBottom: "4px" }}>
+            {posterStatus.status === "failed" ? "The poster agent could not create the poster" : `No poster yet for ${dayEvent.title}`}
+          </b>
+          {posterStatus.error && <span style={{ fontSize: "12px" }}>{posterStatus.error}</span>}
+          <div>
+            <button type="button" onClick={() => retryPoster(dayEvent)} style={{ ...btnDark, marginTop: "10px" }}>
+              <RefreshCw size={12} /> {posterStatus.status === "failed" ? "Try Again" : "Create Poster"}
+            </button>
+          </div>
+        </div>
+      ) : dayEvent ? (
+        <div style={{ ...emptyBox, border: "1px dashed #bfdbfe", background: "#eff6ff", color: "#1e40af", padding: "28px 16px" }}>
+          <RefreshCw size={22} className="spin" style={{ color: "#2563eb", marginBottom: "8px" }} />
+          <b style={{ display: "block", fontSize: "14px", marginBottom: "2px" }}>
+            {dayEvent.knowledge?.summary ? "Agent 2 is creating the poster" : "Agent 1 is researching the festival"}
+          </b>
+          {dayEvent.knowledge?.summary
+            ? `for ${dayEvent.title} from Agent 1's prompt. It appears here when ready (usually under a minute).`
+            : `${dayEvent.title}: its meaning, religion and traditions, then writes the poster prompt for Agent 2.`}
+        </div>
+      ) : null}
+
+      {/* Agent 1 output: structured festival details + the image prompt handed to Agent 2 */}
+      {formMode === "closed" && dayEvent?.knowledge?.summary && (
+        <ResearchPanel event={dayEvent} posterReady={Boolean(dayEvent.poster_url) && posterStatus?.status !== "running"} />
+      )}
+
+      {formMode === "closed" && dayEvents.length > 0 && selectedDateStr >= todayIso && (
+        <button
+          type="button"
+          onClick={() => {
+            setForm(emptyForm);
+            setFormMode("create");
+          }}
+          style={{ ...btnLight, alignSelf: "flex-start", color: "#2563eb", border: "1px dashed #93c5fd", background: "transparent" }}
+        >
+          <Plus size={12} /> Add another festival for this day
+        </button>
+      )}
+    </div>
+  );
+
+  // ==========================================================================
+  return (
+    <div style={{ padding: mode === "regions" && selectedCity ? 0 : "0 0 5rem", maxWidth: "1560px", margin: "0 auto", boxSizing: "border-box", background: "#ffffff", color: "#0f172a" }}>
+      {/* ===================== MARKETING RADAR (dashboard) ===================== */}
+      {mode === "dashboard" && (
         <div>
-          {/* Header Row */}
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.6rem", flexWrap: "wrap", gap: "14px", paddingTop: "0.25rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.6rem", flexWrap: "wrap", gap: "14px" }}>
             <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
-              <div style={{
-                width: "44px",
-                height: "44px",
-                borderRadius: "10px",
-                background: "#fffbeb",
-                border: "1px solid #fef3c7",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                color: "#d97706",
-                flexShrink: 0
-              }}>
+              <div style={{ width: "44px", height: "44px", borderRadius: "10px", background: "#fffbeb", border: "1px solid #fef3c7", display: "flex", alignItems: "center", justifyContent: "center", color: "#d97706", flexShrink: 0 }}>
                 <PartyPopper size={22} />
               </div>
               <div>
-                <h1 style={{ margin: 0, fontSize: "1.45rem", fontWeight: 700, color: "#0f172a", letterSpacing: "-0.02em" }}>
-                  ExtraHand Marketing &amp; Advertisement Dashboard
+                <h1 style={{ margin: 0, fontSize: "1.45rem", fontWeight: 700, letterSpacing: "-0.02em" }}>
+                  {branding.company_name} Marketing &amp; Advertisement Dashboard
                 </h1>
                 <p style={{ margin: "4px 0 0", fontSize: "12.5px", color: "#64748b", fontWeight: 500 }}>
-                  Area-based festival marketing engine. Predicts local demand spikes and automatically prepares customer WhatsApp promos.
+                  Festivals are registered by hand for All-India and each city; the poster agent designs a poster for each one.
                 </p>
               </div>
             </div>
-
-            <div style={{ display: "flex", alignItems: "center", gap: "10px", flexShrink: 0 }}>
-              <div style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "8px",
-                background: "#f0fdf4",
-                border: "1px solid #bbf7d0",
-                padding: "6px 14px",
-                borderRadius: "20px",
-                fontSize: "11.5px",
-                color: "#15803d",
-                fontWeight: 650
-              }}>
-                <span style={{ width: "7px", height: "7px", borderRadius: "50%", background: "#16a34a" }} />
-                <span>Marketing Radar Active</span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowAddCityModal(true)}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "6px",
-                  fontSize: "12px",
-                  fontWeight: 600,
-                  padding: "7px 15px",
-                  background: "#0f172a",
-                  border: "1px solid #0f172a",
-                  borderRadius: "8px",
-                  color: "#ffffff",
-                  cursor: "pointer",
-                  transition: "all 0.15s ease",
-                  boxShadow: "0 1px 2px rgba(0,0,0,0.05)"
-                }}
-              >
-                <Plus size={13} />
-                <span>Add City</span>
-              </button>
-              <button
-                type="button"
-                onClick={fetchCities}
-                disabled={loadingCities}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "6px",
-                  fontSize: "12px",
-                  fontWeight: 600,
-                  padding: "7px 15px",
-                  background: "#ffffff",
-                  border: "1px solid #cbd5e1",
-                  borderRadius: "8px",
-                  color: "#334155",
-                  cursor: "pointer",
-                  transition: "all 0.15s ease",
-                  boxShadow: "0 1px 2px rgba(0,0,0,0.04)"
-                }}
-              >
-                <RefreshCw size={12} className={loadingCities ? "spin" : ""} />
-                <span>Refresh Sync</span>
-              </button>
-            </div>
-          </div>
-
-          {/* 4 TOP MARKETING KPI CARDS - CLEAN MODERN MINIMALIST DESIGN */}
-          <div style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))",
-            gap: "14px",
-            marginBottom: "1.8rem"
-          }}>
-            {/* KPI Card 1: Active Cities */}
-            <motion.div
-              whileHover={{ y: -2 }}
-              style={{
-                background: "#ffffff",
-                border: "1px solid #e2e8f0",
-                borderRadius: "12px",
-                padding: "16px 18px",
-                display: "flex",
-                alignItems: "center",
-                gap: "14px",
-                boxShadow: "0 1px 3px rgba(0,0,0,0.03)"
-              }}
-            >
-              <div style={{
-                width: "42px",
-                height: "42px",
-                borderRadius: "10px",
-                background: "#eff6ff",
-                border: "1px solid #dbeafe",
-                color: "#2563eb",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                flexShrink: 0
-              }}>
-                <MapPin size={20} />
-              </div>
-              <div style={{ minWidth: 0 }}>
-                <span style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em", display: "block" }}>
-                  Active Cities
-                </span>
-                <div style={{ fontSize: "24px", fontWeight: 700, color: "#0f172a", lineHeight: 1.15, marginTop: "2px" }}>
-                  {totalCitiesCount} Cities
-                </div>
-                <span style={{ fontSize: "11.5px", color: "#64748b", fontWeight: 500, marginTop: "2px", display: "block" }}>
-                  Telangana hubs &amp; All-India
-                </span>
-              </div>
-            </motion.div>
-
-            {/* KPI Card 2: Events This Month */}
-            <motion.div
-              whileHover={{ y: -2 }}
-              style={{
-                background: "#ffffff",
-                border: "1px solid #e2e8f0",
-                borderRadius: "12px",
-                padding: "16px 18px",
-                display: "flex",
-                alignItems: "center",
-                gap: "14px",
-                boxShadow: "0 1px 3px rgba(0,0,0,0.03)"
-              }}
-            >
-              <div style={{
-                width: "42px",
-                height: "42px",
-                borderRadius: "10px",
-                background: "#fffbeb",
-                border: "1px solid #fef3c7",
-                color: "#d97706",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                flexShrink: 0
-              }}>
-                <CalendarIcon size={20} />
-              </div>
-              <div style={{ minWidth: 0 }}>
-                <span style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em", display: "block" }}>
-                  Events This Month
-                </span>
-                <div style={{ fontSize: "24px", fontWeight: 700, color: "#0f172a", lineHeight: 1.15, marginTop: "2px" }}>
-                  {totalEventsCount} Events
-                </div>
-                <span style={{ fontSize: "11.5px", color: "#64748b", fontWeight: 500, marginTop: "2px", display: "block" }}>
-                  November 2026 local surges
-                </span>
-              </div>
-            </motion.div>
-
-            {/* KPI Card 3: WhatsApp Promos Sent */}
-            <motion.div
-              whileHover={{ y: -2 }}
-              style={{
-                background: "#ffffff",
-                border: "1px solid #e2e8f0",
-                borderRadius: "12px",
-                padding: "16px 18px",
-                display: "flex",
-                alignItems: "center",
-                gap: "14px",
-                boxShadow: "0 1px 3px rgba(0,0,0,0.03)"
-              }}
-            >
-              <div style={{
-                width: "42px",
-                height: "42px",
-                borderRadius: "10px",
-                background: "#f0fdf4",
-                border: "1px solid #dcfce7",
-                color: "#16a34a",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                flexShrink: 0
-              }}>
-                <MessageSquare size={20} />
-              </div>
-              <div style={{ minWidth: 0 }}>
-                <span style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em", display: "block" }}>
-                  WhatsApp Promos Sent
-                </span>
-                <div style={{ fontSize: "24px", fontWeight: 700, color: "#0f172a", lineHeight: 1.15, marginTop: "2px" }}>
-                  {totalAdsSent.toLocaleString()} Messages
-                </div>
-                <span style={{ fontSize: "11.5px", color: "#15803d", fontWeight: 600, marginTop: "2px", display: "block" }}>
-                  98.4% Delivery rate
-                </span>
-              </div>
-            </motion.div>
-
-            {/* KPI Card 4: Booking Conversion */}
-            <motion.div
-              whileHover={{ y: -2 }}
-              style={{
-                background: "#ffffff",
-                border: "1px solid #e2e8f0",
-                borderRadius: "12px",
-                padding: "16px 18px",
-                display: "flex",
-                alignItems: "center",
-                gap: "14px",
-                boxShadow: "0 1px 3px rgba(0,0,0,0.03)"
-              }}
-            >
-              <div style={{
-                width: "42px",
-                height: "42px",
-                borderRadius: "10px",
-                background: "#faf5ff",
-                border: "1px solid #f3e8ff",
-                color: "#7c3aed",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                flexShrink: 0
-              }}>
-                <TrendingUp size={20} />
-              </div>
-              <div style={{ minWidth: 0 }}>
-                <span style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em", display: "block" }}>
-                  Booking Conversion
-                </span>
-                <div style={{ fontSize: "24px", fontWeight: 700, color: "#0f172a", lineHeight: 1.15, marginTop: "2px" }}>
-                  38.4% Conv
-                </div>
-                <span style={{ fontSize: "11.5px", color: "#64748b", fontWeight: 500, marginTop: "2px", display: "block" }}>
-                  545 orders (₹3.85L GMV)
-                </span>
-              </div>
-            </motion.div>
-          </div>
-
-          {/* ANALYTICS SECTION: DEMAND SURGES & MARKETING FUNNEL */}
-          <div style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(440px, 1fr))",
-            gap: "18px",
-            marginBottom: "2.2rem"
-          }}>
-            {/* Chart 1: Festival Demand Surge Percentage */}
-            <div style={{
-              background: "#ffffff",
-              border: "1px solid #e2e8f0",
-              borderRadius: "14px",
-              padding: "22px",
-              boxSizing: "border-box",
-              boxShadow: "0 1px 3px rgba(0,0,0,0.03)"
-            }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px", flexWrap: "wrap", gap: "8px" }}>
-                <div>
-                  <h3 style={{ margin: 0, fontSize: "15px", fontWeight: 700, display: "flex", alignItems: "center", gap: "8px", color: "#0f172a" }}>
-                    <TrendingUp size={17} style={{ color: "#ea580c" }} />
-                    <span>Festival Demand Surge by City &amp; Area (%)</span>
-                  </h3>
-                  <span style={{ fontSize: "12px", color: "#64748b", display: "block", marginTop: "2px", fontWeight: 500 }}>
-                    Incremental ExtraHand customer demand driven by upcoming festivals
-                  </span>
-                </div>
-                <span style={{
-                  background: "#fff7ed",
-                  border: "1px solid #ffedd5",
-                  color: "#ea580c",
-                  fontWeight: 650,
-                  fontSize: "11px",
-                  padding: "3px 10px",
-                  borderRadius: "20px"
-                }}>
-                  ● Live Radar Spikes
-                </span>
-              </div>
-
-              {/* Demand Surge Visual Bars */}
-              <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
-                <div>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "12.5px", fontWeight: 650, marginBottom: "6px" }}>
-                    <span style={{ color: "#0f172a" }}>All-India · Diwali Festival of Lights</span>
-                    <span style={{ background: "#fef2f2", border: "1px solid #fecaca", color: "#dc2626", fontWeight: 700, fontSize: "11.5px", padding: "1px 7px", borderRadius: "5px" }}>
-                      +95% Spike
-                    </span>
-                  </div>
-                  <div style={{ width: "100%", height: "7px", background: "#f1f5f9", borderRadius: "5px", overflow: "hidden" }}>
-                    <div style={{ width: "95%", height: "100%", background: "linear-gradient(90deg, #f97316 0%, #ef4444 100%)", borderRadius: "5px" }} />
-                  </div>
-                  <span style={{ fontSize: "11px", color: "#64748b", marginTop: "3px", display: "block", fontWeight: 500 }}>
-                    Target Service: Deep Cleaning, Balcony Wash &amp; Complete Whitewashing
-                  </span>
-                </div>
-
-                <div>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "12.5px", fontWeight: 650, marginBottom: "6px" }}>
-                    <span style={{ color: "#0f172a" }}>Warangal · Bhadrakali Deepotsavam</span>
-                    <span style={{ background: "#fff7ed", border: "1px solid #fed7aa", color: "#c2410c", fontWeight: 700, fontSize: "11.5px", padding: "1px 7px", borderRadius: "5px" }}>
-                      +92% Spike
-                    </span>
-                  </div>
-                  <div style={{ width: "100%", height: "7px", background: "#f1f5f9", borderRadius: "5px", overflow: "hidden" }}>
-                    <div style={{ width: "92%", height: "100%", background: "linear-gradient(90deg, #f59e0b 0%, #ea580c 100%)", borderRadius: "5px" }} />
-                  </div>
-                  <span style={{ fontSize: "11px", color: "#64748b", marginTop: "3px", display: "block", fontWeight: 500 }}>
-                    Target Service: Temple Illumination, Switchboard Fixes &amp; Safety Wiring
-                  </span>
-                </div>
-
-                <div>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "12.5px", fontWeight: 650, marginBottom: "6px" }}>
-                    <span style={{ color: "#0f172a" }}>Siddipet · Komuravelli Mallanna Jathara</span>
-                    <span style={{ background: "#fefce8", border: "1px solid #fef08a", color: "#a16207", fontWeight: 700, fontSize: "11.5px", padding: "1px 7px", borderRadius: "5px" }}>
-                      +85% Spike
-                    </span>
-                  </div>
-                  <div style={{ width: "100%", height: "7px", background: "#f1f5f9", borderRadius: "5px", overflow: "hidden" }}>
-                    <div style={{ width: "85%", height: "100%", background: "linear-gradient(90deg, #eab308 0%, #f59e0b 100%)", borderRadius: "5px" }} />
-                  </div>
-                  <span style={{ fontSize: "11px", color: "#64748b", marginTop: "3px", display: "block", fontWeight: 500 }}>
-                    Target Service: Pilgrim Guest House Sanitization &amp; Floor Scrubbing
-                  </span>
-                </div>
-
-                <div>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "12.5px", fontWeight: 650, marginBottom: "6px" }}>
-                    <span style={{ color: "#0f172a" }}>Mahabubnagar · Manyamkonda Utsavam</span>
-                    <span style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#15803d", fontWeight: 700, fontSize: "11.5px", padding: "1px 7px", borderRadius: "5px" }}>
-                      +78% Spike
-                    </span>
-                  </div>
-                  <div style={{ width: "100%", height: "7px", background: "#f1f5f9", borderRadius: "5px", overflow: "hidden" }}>
-                    <div style={{ width: "78%", height: "100%", background: "linear-gradient(90deg, #10b981 0%, #059669 100%)", borderRadius: "5px" }} />
-                  </div>
-                  <span style={{ fontSize: "11px", color: "#64748b", marginTop: "3px", display: "block", fontWeight: 500 }}>
-                    Target Service: Water Sump &amp; Overhead Tank Cleaning, Whitewash
-                  </span>
-                </div>
-
-                <div>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "12.5px", fontWeight: 650, marginBottom: "6px" }}>
-                    <span style={{ color: "#0f172a" }}>Karimnagar · Kondagattu Hanuman Jayanthi</span>
-                    <span style={{ background: "#ecfeff", border: "1px solid #a5f3fc", color: "#0e7490", fontWeight: 700, fontSize: "11.5px", padding: "1px 7px", borderRadius: "5px" }}>
-                      +65% Spike
-                    </span>
-                  </div>
-                  <div style={{ width: "100%", height: "7px", background: "#f1f5f9", borderRadius: "5px", overflow: "hidden" }}>
-                    <div style={{ width: "65%", height: "100%", background: "linear-gradient(90deg, #06b6d4 0%, #0284c7 100%)", borderRadius: "5px" }} />
-                  </div>
-                  <span style={{ fontSize: "11px", color: "#64748b", marginTop: "3px", display: "block", fontWeight: 500 }}>
-                    Target Service: Pipe Line Flushes &amp; Emergency Water Motor Setup
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Chart 2: Marketing Channel Performance & Customer Conversion */}
-            <div style={{
-              background: "#ffffff",
-              border: "1px solid #e2e8f0",
-              borderRadius: "14px",
-              padding: "22px",
-              display: "flex",
-              flexDirection: "column",
-              justifyContent: "space-between",
-              boxSizing: "border-box",
-              boxShadow: "0 1px 3px rgba(0,0,0,0.03)"
-            }}>
-              <div>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px", flexWrap: "wrap", gap: "8px" }}>
-                  <div>
-                    <h3 style={{ margin: 0, fontSize: "15px", fontWeight: 700, display: "flex", alignItems: "center", gap: "8px", color: "#0f172a" }}>
-                      <BarChart3 size={17} style={{ color: "#2563eb" }} />
-                      <span>Marketing Channels &amp; Performance</span>
-                    </h3>
-                    <span style={{ fontSize: "12px", color: "#64748b", display: "block", marginTop: "2px", fontWeight: 500 }}>
-                      Customer acquisition efficiency across advertisement methods
-                    </span>
-                  </div>
-                  <span style={{
-                    background: "#eff6ff",
-                    border: "1px solid #dbeafe",
-                    color: "#2563eb",
-                    fontWeight: 650,
-                    fontSize: "11px",
-                    padding: "3px 10px",
-                    borderRadius: "20px"
-                  }}>
-                    High Converting
-                  </span>
-                </div>
-
-                <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-                  {/* Channel 1: WhatsApp */}
-                  <div style={{ padding: "10px 14px", background: "#f8fafc", borderRadius: "8px", border: "1px solid #f1f5f9" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px", flexWrap: "wrap", gap: "6px" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                        <div style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#16a34a" }} />
-                        <span style={{ fontSize: "12.5px", fontWeight: 650, color: "#0f172a" }}>WhatsApp Direct Broadcasts</span>
-                      </div>
-                      <span style={{ fontSize: "11.5px", fontWeight: 700, color: "#15803d", background: "#dcfce7", border: "1px solid #bbf7d0", padding: "1px 7px", borderRadius: "5px" }}>
-                        38.4% Conversion
-                      </span>
-                    </div>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "6px", fontSize: "11.5px", marginTop: "3px" }}>
-                      <span style={{ color: "#64748b", fontWeight: 500 }}>1,420 Dispatched · 1,398 Delivered</span>
-                      <span style={{ fontWeight: 600, color: "#0f172a" }}>545 Bookings Generated</span>
-                    </div>
-                  </div>
-
-                  {/* Channel 2: In-App Banners */}
-                  <div style={{ padding: "10px 14px", background: "#f8fafc", borderRadius: "8px", border: "1px solid #f1f5f9" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px", flexWrap: "wrap", gap: "6px" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                        <div style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#2563eb" }} />
-                        <span style={{ fontSize: "12.5px", fontWeight: 650, color: "#0f172a" }}>In-App Festive Promo Banners</span>
-                      </div>
-                      <span style={{ fontSize: "11.5px", fontWeight: 700, color: "#1d4ed8", background: "#eff6ff", border: "1px solid #bfdbfe", padding: "1px 7px", borderRadius: "5px" }}>
-                        44.0% Conversion
-                      </span>
-                    </div>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "6px", fontSize: "11.5px", marginTop: "3px" }}>
-                      <span style={{ color: "#64748b", fontWeight: 500 }}>2,850 Banners · 890 Clicks</span>
-                      <span style={{ fontWeight: 600, color: "#0f172a" }}>392 Redemptions</span>
-                    </div>
-                  </div>
-
-                  {/* Channel 3: SMS Flash */}
-                  <div style={{ padding: "10px 14px", background: "#f8fafc", borderRadius: "8px", border: "1px solid #f1f5f9" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px", flexWrap: "wrap", gap: "6px" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                        <div style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#d97706" }} />
-                        <span style={{ fontSize: "12.5px", fontWeight: 650, color: "#0f172a" }}>Area SMS Flash Notifications</span>
-                      </div>
-                      <span style={{ fontSize: "11.5px", fontWeight: 700, color: "#b45309", background: "#fef3c7", border: "1px solid #fde68a", padding: "1px 7px", borderRadius: "5px" }}>
-                        27.1% Conversion
-                      </span>
-                    </div>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "6px", fontSize: "11.5px", marginTop: "3px" }}>
-                      <span style={{ color: "#64748b", fontWeight: 500 }}>620 SMS Delivered · 410 Opened</span>
-                      <span style={{ fontWeight: 600, color: "#0f172a" }}>168 Fast Bookings</span>
-                    </div>
-                  </div>
-
-                  {/* Channel 4: Referrals */}
-                  <div style={{ padding: "10px 14px", background: "#f8fafc", borderRadius: "8px", border: "1px solid #f1f5f9" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px", flexWrap: "wrap", gap: "6px" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                        <div style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#7c3aed" }} />
-                        <span style={{ fontSize: "12.5px", fontWeight: 650, color: "#0f172a" }}>Partner Referrals &amp; Community Links</span>
-                      </div>
-                      <span style={{ fontSize: "11.5px", fontWeight: 700, color: "#6b21a8", background: "#faf5ff", border: "1px solid #e9d5ff", padding: "1px 7px", borderRadius: "5px" }}>
-                        40.0% Conversion
-                      </span>
-                    </div>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "6px", fontSize: "11.5px", marginTop: "3px" }}>
-                      <span style={{ color: "#64748b", fontWeight: 500 }}>310 Shared Links · 220 Clicks</span>
-                      <span style={{ fontWeight: 600, color: "#0f172a" }}>124 Verified Orders</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Bottom Insight Box */}
-              <div style={{
-                marginTop: "16px",
-                padding: "12px 16px",
-                background: "#fffbeb",
-                border: "1px solid #fef3c7",
-                borderRadius: "10px",
-                display: "flex",
-                alignItems: "center"
-              }}>
-                <span style={{ fontSize: "12px", color: "#92400e", fontWeight: 500, lineHeight: 1.4 }}>
-                  💡 <b style={{ color: "#78350f" }}>Marketing Insight:</b> Automated festive WhatsApp campaigns deliver 3.2x higher ROI and faster booking responses than cold calling.
-                </span>
-              </div>
-            </div>
-          </div>
-
-
-        </div>
-      ) : (
-        /* =========================================================================
-            VIEW 2: DEDICATED CITY CALENDAR PAGE
-            CLEAN, MINIMALIST MODERN SAAS DESIGN (70% CALENDAR / 30% DAY SPECIAL)
-            ========================================================================= */
-        <div>
-          {/* Top Month Controls Bar */}
-          <div style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: "1.5rem",
-            flexWrap: "wrap",
-            gap: "14px",
-            padding: "14px 20px",
-            background: "#ffffff",
-            border: "1px solid #e2e8f0",
-            borderRadius: "14px",
-            boxShadow: "0 1px 3px rgba(0,0,0,0.03)"
-          }}>
-            {/* Left: City Icon + Title + Live Badge */}
-            <div style={{ display: "flex", alignItems: "center", gap: "14px", minWidth: 0 }}>
-              <div style={{
-                width: "40px",
-                height: "40px",
-                borderRadius: "10px",
-                background: "#eff6ff",
-                border: "1px solid #dbeafe",
-                color: "#2563eb",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                flexShrink: 0
-              }}>
-                {isIndiaSelected ? <Globe size={20} /> : <MapPin size={20} />}
-              </div>
-
-              <div style={{ minWidth: 0 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-                  <h2 style={{ margin: 0, fontSize: "17px", fontWeight: 700, color: "#0f172a", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {isIndiaSelected ? "Government of India · National Calendar" : `${selectedCity} Regional Festival & Events Calendar`}
-                  </h2>
-                  <span style={{
-                    background: isIndiaSelected ? "#eff6ff" : "#f0fdf4",
-                    border: isIndiaSelected ? "1px solid #bfdbfe" : "1px solid #bbf7d0",
-                    color: isIndiaSelected ? "#1d4ed8" : "#15803d",
-                    fontSize: "11px",
-                    fontWeight: 650,
-                    padding: "3px 9px",
-                    borderRadius: "12px",
-                    whiteSpace: "nowrap"
-                  }}>
-                    {isIndiaSelected ? "Gazetted National Calendar" : "Live City Calendar"}
-                  </span>
-                </div>
-                <span style={{ fontSize: "12px", color: "#64748b", display: "block", marginTop: "2px", fontWeight: 500 }}>
-                  {isIndiaSelected
-                    ? "Official Gazetted Public Holidays, National Festivals & Countrywide ExtraHand Promos (india.gov.in)."
-                    : `Official district portals and local festival radar mapped to ExtraHand service spikes in ${selectedCity}.`}
-                </span>
-              </div>
-            </div>
-
-            {/* Right Action Bar: Month Switcher Controls */}
-            <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
-              <button
-                type="button"
-                onClick={handleToday}
-                style={{
-                  fontSize: "12px",
-                  padding: "6px 14px",
-                  fontWeight: 600,
-                  background: "#ffffff",
-                  border: "1px solid #cbd5e1",
-                  borderRadius: "8px",
-                  color: "#334155",
-                  cursor: "pointer",
-                  transition: "all 0.15s ease"
-                }}
-              >
-                Today
-              </button>
-              <button
-                type="button"
-                onClick={handlePrevMonth}
-                style={{
-                  padding: "6px 9px",
-                  background: "#ffffff",
-                  border: "1px solid #cbd5e1",
-                  borderRadius: "8px",
-                  color: "#475569",
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center"
-                }}
-                title="Previous month"
-              >
-                <ChevronLeft size={16} />
-              </button>
-              <span style={{ fontWeight: 700, fontSize: "14px", minWidth: "125px", textAlign: "center", color: "#0f172a" }}>
-                {MONTH_NAMES[calMonth]} {calYear}
-              </span>
-              <button
-                type="button"
-                onClick={handleNextMonth}
-                style={{
-                  padding: "6px 9px",
-                  background: "#ffffff",
-                  border: "1px solid #cbd5e1",
-                  borderRadius: "8px",
-                  color: "#475569",
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center"
-                }}
-                title="Next month"
-              >
-                <ChevronRight size={16} />
-              </button>
-            </div>
-          </div>
-
-          {/* MONITORED DATA SOURCES & AUTONOMOUS AI CRAWLER ACTION BAR */}
-          <div style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: "1.25rem",
-            flexWrap: "wrap",
-            gap: "12px",
-            padding: "12px 18px",
-            background: "#ffffff",
-            border: "1px solid #e2e8f0",
-            borderRadius: "12px",
-            boxShadow: "0 1px 3px rgba(0,0,0,0.02)"
-          }}>
-            {/* Left: Monitored Portals */}
-            <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap", minWidth: 0 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", fontWeight: 700, color: "#0f172a" }}>
-                <Bot size={16} style={{ color: "#2563eb" }} />
-                <span>Monitored Sources ({selectedCitySources.length} Official Portals):</span>
-              </div>
-
-              <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-                {selectedCitySources.map((url, idx) => {
-                  let cleanDisplay = url.replace("https://", "").replace("http://", "").replace("www.", "");
-                  if (cleanDisplay.endsWith("/")) cleanDisplay = cleanDisplay.slice(0, -1);
-                  if (cleanDisplay.length > 28) cleanDisplay = cleanDisplay.slice(0, 26) + "…";
-
-                  return (
-                    <a
-                      key={idx}
-                      href={url}
-                      target="_blank"
-                      rel="noreferrer"
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: "6px",
-                        fontSize: "11.5px",
-                        fontWeight: 500,
-                        color: "#334155",
-                        background: "#f8fafc",
-                        border: "1px solid #e2e8f0",
-                        padding: "4px 10px",
-                        borderRadius: "8px",
-                        textDecoration: "none",
-                        transition: "all 0.15s ease"
-                      }}
-                      title={`Open ${url}`}
-                    >
-                      <div style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#16a34a" }} />
-                      <span>{cleanDisplay}</span>
-                      <ExternalLink size={11} style={{ color: "#94a3b8" }} />
-                    </a>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Right: Autonomous Web Reading Agent Button */}
-            <button
-              type="button"
-              onClick={handleTriggerScan}
-              disabled={scanning}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "7px",
-                fontSize: "12px",
-                fontWeight: 650,
-                padding: "7px 15px",
-                background: "#0f172a",
-                border: "1px solid #0f172a",
-                borderRadius: "8px",
-                color: "#ffffff",
-                cursor: scanning ? "wait" : "pointer",
-                transition: "all 0.15s ease",
-                boxShadow: "0 1px 2px rgba(0,0,0,0.05)"
-              }}
-            >
-              {scanning ? (
-                <>
-                  <RefreshCw size={13} className="spin" style={{ color: "#60a5fa" }} />
-                  <span>Reading Websites Sequentially...</span>
-                </>
-              ) : (
-                <>
-                  <Bot size={14} style={{ color: "#60a5fa" }} />
-                  <span>AI Agent: Read Websites &amp; Scan Events</span>
-                </>
-              )}
+            <button type="button" onClick={fetchCities} disabled={loadingCities} style={btnLight}>
+              <RefreshCw size={12} className={loadingCities ? "spin" : ""} />
+              Refresh
             </button>
           </div>
 
-          {/* TWO-COLUMN RESPONSIVE GRID (70% CALENDAR / 30% DAY SPECIAL) */}
-          <div style={{
-            display: "grid",
-            gridTemplateColumns: "minmax(0, 7fr) minmax(350px, 3.2fr)",
-            gap: "20px",
-            alignItems: "flex-start",
-            width: "100%",
-            boxSizing: "border-box"
-          }}>
-            {/* 70% LEFT: MONTHLY CALENDAR GRID */}
-            <div style={{
-              minWidth: 0,
-              width: "100%",
-              background: "#ffffff",
-              border: "1px solid #e2e8f0",
-              borderRadius: "14px",
-              padding: "20px",
-              boxSizing: "border-box",
-              boxShadow: "0 1px 3px rgba(0,0,0,0.03)"
-            }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                  <CalendarIcon size={18} style={{ color: "#2563eb" }} />
-                  <span style={{ fontWeight: 700, fontSize: "15px", color: "#0f172a" }}>
-                    {MONTH_NAMES[calMonth]} {calYear} Schedule
-                  </span>
-                  {loadingEvents && <RefreshCw size={12} className="spin" style={{ color: "#2563eb" }} />}
-                </div>
-                <span style={{ fontSize: "12px", color: "#64748b", whiteSpace: "nowrap", fontWeight: 500 }}>
-                  Selected Date: <b style={{ color: "#0f172a" }}>{selectedDateStr}</b>
-                </span>
-              </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: "14px", marginBottom: "1.8rem" }}>
+            {kpi(<MapPin size={20} />, "#2563eb", "States & Cities", `${cityRegions.length} Cities`, "+ All-India calendar", () => navigate("/advertisement/regions"))}
+            {kpi(<CalendarIcon size={20} />, "#d97706", "Upcoming Festivals", `${allEvents.length}`, `From ${monthLabel}`)}
+            {kpi(<ImageIcon size={20} />, "#16a34a", "Posters Ready", `${postersReady}`, `${allEvents.length - postersReady} still to design`)}
+            {kpi(<Tag size={20} />, "#7c3aed", "Top Discount", topDiscount > 0 ? `${topDiscount}% OFF` : "—", "Across registered coupons")}
+          </div>
 
-              {/* 7-Column Day Header (Sun-Sat) */}
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: "6px", marginBottom: "8px", textAlign: "center" }}>
-                {WEEKDAY_NAMES.map((d) => (
-                  <div key={d} style={{
-                    fontSize: "11.5px",
-                    fontWeight: 600,
-                    color: "#64748b",
-                    padding: "6px 0",
-                    background: "#f8fafc",
-                    border: "1px solid #f1f5f9",
-                    borderRadius: "8px",
-                    minWidth: 0
-                  }}>
-                    {d}
-                  </div>
-                ))}
-              </div>
-
-              {/* 7-Column Day Cells Matrix: ONLY SHOW DATE AND SPECIAL OF THAT DAY IN GREEN! */}
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: "6px" }}>
-                {calendarDays.map((cell, idx) => {
-                  const hasEvents = cell.events.length > 0;
-                  const isDateSelected = cell.dateStr === selectedDateStr;
-
-                  return (
-                    <div
-                      key={idx}
-                      style={{
-                        minHeight: "96px",
-                        minWidth: 0,
-                        overflow: "hidden",
-                        boxSizing: "border-box",
-                        background: !cell.isCurrentMonth
-                          ? "#fcfcfc"
-                          : isDateSelected
-                          ? "#f0fdf4"
-                          : "#ffffff",
-                        border: isDateSelected
-                          ? "1.5px solid #16a34a"
-                          : "1px solid #f1f5f9",
-                        borderRadius: "10px",
-                        padding: "8px",
-                        display: "flex",
-                        flexDirection: "column",
-                        opacity: cell.isCurrentMonth ? 1 : 0.35,
-                        transition: "all 0.15s ease",
-                        cursor: cell.isCurrentMonth ? "pointer" : "default"
-                      }}
-                      onClick={() => {
-                        if (cell.isCurrentMonth && cell.dateStr) {
-                          setSelectedDateStr(cell.dateStr);
-                        }
-                      }}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))", gap: "18px" }}>
+            <div style={{ ...card, padding: "22px" }}>
+              <h3 style={{ margin: "0 0 4px", fontSize: "15px", fontWeight: 700, display: "flex", alignItems: "center", gap: "8px" }}>
+                <CalendarIcon size={17} style={{ color: "#ea580c" }} />
+                Next Festivals
+              </h3>
+              <span style={{ fontSize: "12px", color: "#64748b", fontWeight: 500 }}>The next festivals registered across all regions</span>
+              {upcoming.length === 0 ? (
+                <p style={{ margin: "14px 0 0", fontSize: "12.5px", color: "#64748b" }}>
+                  No festivals yet. Open States &amp; Cities, pick a region and click a date to register one.
+                </p>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "14px" }}>
+                  {upcoming.map((e) => (
+                    <button
+                      key={e.id}
+                      type="button"
+                      onClick={() => navigate(regionCalendarPath(e.city))}
+                      style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "10px", padding: "9px 12px", background: "#f8fafc", border: "1px solid #f1f5f9", borderRadius: "8px", cursor: "pointer", textAlign: "left" }}
                     >
-                      {/* Date number */}
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
-                        <span style={{
-                          fontSize: "13px",
-                          fontWeight: 650,
-                          color: isDateSelected ? "#15803d" : "#0f172a"
-                        }}>
-                          {cell.dayNumber}
-                        </span>
-                      </div>
-
-                      {/* ONLY Special of that day in GREEN! */}
-                      {hasEvents && (
-                        <div style={{ display: "flex", flexDirection: "column", gap: "3px", overflow: "hidden", minWidth: 0, marginTop: "2px" }}>
-                          {cell.events.map((ev) => (
-                            <div
-                              key={ev.id}
-                              style={{
-                                background: "#dcfce7",
-                                color: "#15803d",
-                                border: "1px solid #bbf7d0",
-                                borderRadius: "5px",
-                                padding: "3px 6px",
-                                fontSize: "11px",
-                                fontWeight: 600,
-                                lineHeight: 1.25,
-                                whiteSpace: "nowrap",
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                                minWidth: 0,
-                                display: "block"
-                              }}
-                              title={ev.title}
-                            >
-                              {ev.title}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
+                      <span style={{ minWidth: 0 }}>
+                        <span style={{ display: "block", fontSize: "12.5px", fontWeight: 650, color: "#0f172a", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{e.title}</span>
+                        <span style={{ fontSize: "11.5px", color: "#64748b" }}>{e.date_start} · {e.city}</span>
+                      </span>
+                      <span style={{ fontSize: "11px", fontWeight: 700, color: "#15803d", background: "#dcfce7", borderRadius: "6px", padding: "2px 8px", flexShrink: 0 }}>{e.discount_code}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
-            {/* =========================================================================
-                30% RIGHT: DAY SPECIAL PANEL
-                Details of that day + Discount % & Coupon ("cups") + Customer WhatsApp Msg
-                ========================================================================= */}
-            <div style={{
-              minWidth: 0,
-              width: "100%",
-              background: "#ffffff",
-              border: "1px solid #e2e8f0",
-              borderRadius: "14px",
-              padding: "18px 20px",
-              boxSizing: "border-box",
-              position: "sticky",
-              top: "76px",
-              boxShadow: "0 1px 3px rgba(0,0,0,0.03)"
-            }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem", borderBottom: "1px solid #e2e8f0", paddingBottom: "10px" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                  <Sparkles size={17} style={{ color: "#d97706" }} />
-                  <div>
-                    <h3 style={{ margin: 0, fontSize: "15px", fontWeight: 700, color: "#0f172a" }}>Day Special</h3>
-                    <span style={{ fontSize: "11.5px", color: "#64748b", fontWeight: 500 }}>Festival &amp; Customer Offer</span>
-                  </div>
+            <div style={{ ...card, padding: "22px" }}>
+              <h3 style={{ margin: "0 0 4px", fontSize: "15px", fontWeight: 700, display: "flex", alignItems: "center", gap: "8px" }}>
+                <BarChart3 size={17} style={{ color: "#2563eb" }} />
+                Festivals by Region
+              </h3>
+              <span style={{ fontSize: "12px", color: "#64748b", fontWeight: 500 }}>Upcoming festivals registered per region</span>
+              {byRegion.length === 0 ? (
+                <p style={{ margin: "14px 0 0", fontSize: "12.5px", color: "#64748b" }}>No festivals yet.</p>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginTop: "14px" }}>
+                  {byRegion.map((r) => (
+                    <div key={r.name}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12.5px", fontWeight: 650, marginBottom: "5px" }}>
+                        <span>{r.name}</span>
+                        <span>{r.count}</span>
+                      </div>
+                      <div style={{ height: "6px", background: "#e2e8f0", borderRadius: "5px", overflow: "hidden" }}>
+                        <div style={{ width: `${(r.count / maxRegionCount) * 100}%`, height: "100%", background: "#2563eb", borderRadius: "5px" }} />
+                      </div>
+                    </div>
+                  ))}
                 </div>
-                <span style={{
-                  background: "#f8fafc",
-                  border: "1px solid #e2e8f0",
-                  color: "#0f172a",
-                  fontWeight: 650,
-                  fontSize: "11.5px",
-                  padding: "3px 10px",
-                  borderRadius: "12px",
-                  whiteSpace: "nowrap",
-                  flexShrink: 0
-                }}>
-                  {selectedDateStr}
-                </span>
-              </div>
-
-              <FestivalPosterCard
-                event={daySpecialEvent}
-                selectedCity={selectedCity}
-                selectedDateStr={selectedDateStr}
-                isIndiaSelected={isIndiaSelected}
-              />
+              )}
             </div>
           </div>
         </div>
       )}
 
-      {/* MODAL: ADD NEW CITY (CITY NAME + DATA SOURCES: MIN 2, MAX 5) */}
-      <AnimatePresence>
-        {showAddCityModal && (
-          <div style={{ position: "fixed", inset: 0, background: "rgba(15, 23, 42, 0.45)", backdropFilter: "blur(4px)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}>
-            <motion.div
-              initial={{ opacity: 0, scale: 0.94, y: 10 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.94, y: 10 }}
-              style={{
-                background: "#ffffff",
-                border: "1px solid #e2e8f0",
-                borderRadius: "14px",
-                padding: "24px",
-                maxWidth: "480px",
-                width: "100%",
-                boxShadow: "0 20px 45px rgba(0, 0, 0, 0.12)",
-                color: "#0f172a"
-              }}
-            >
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem", borderBottom: "1px solid #f1f5f9", paddingBottom: "12px" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                  <div style={{ width: "28px", height: "28px", borderRadius: "6px", background: "#eff6ff", border: "1px solid #dbeafe", color: "#2563eb", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                    <Plus size={16} />
-                  </div>
-                  <div>
-                    <h3 style={{ margin: 0, fontSize: "15px", fontWeight: 700, color: "#0f172a" }}>Add New City &amp; Data Sources</h3>
-                    <span style={{ fontSize: "11px", color: "#64748b", fontWeight: 500 }}>Configure monthly festival radar and event tracking</span>
-                  </div>
-                </div>
-                <button type="button" onClick={() => setShowAddCityModal(false)} style={{ background: "transparent", border: "none", cursor: "pointer", color: "#64748b" }}>
-                  <X size={18} />
-                </button>
+      {/* ===================== STATES & CITIES (KPI cards) ===================== */}
+      {mode === "regions" && !selectedCity && (
+        <div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap", gap: "12px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+              <div style={{ width: "40px", height: "40px", borderRadius: "10px", background: "#eff6ff", border: "1px solid #dbeafe", color: "#2563eb", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                <MapPin size={20} />
               </div>
-
-              <form onSubmit={handleAddCity} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-                {/* 1. City Name & State */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
-                  <div>
-                    <label style={{ fontSize: "12px", fontWeight: 600, color: "#0f172a", display: "block", marginBottom: "5px" }}>
-                      City / District Name:
-                    </label>
-                    <input
-                      type="text"
-                      className="input"
-                      value={newCityName}
-                      onChange={(e) => setNewCityName(e.target.value)}
-                      placeholder="e.g. Vijayawada, Mysuru, Khammam..."
-                      autoFocus
-                      required
-                      style={{ width: "100%", fontSize: "13px", border: "1px solid #cbd5e1", color: "#0f172a", background: "#ffffff", borderRadius: "8px", padding: "8px 12px" }}
-                    />
-                  </div>
-                  <div>
-                    <label style={{ fontSize: "12px", fontWeight: 600, color: "#0f172a", display: "block", marginBottom: "5px" }}>
-                      State / Region:
-                    </label>
-                    <input
-                      type="text"
-                      className="input"
-                      value={newCityState}
-                      onChange={(e) => setNewCityState(e.target.value)}
-                      placeholder="e.g. Telangana, Andhra Pradesh, Karnataka..."
-                      required
-                      style={{ width: "100%", fontSize: "13px", border: "1px solid #cbd5e1", color: "#0f172a", background: "#ffffff", borderRadius: "8px", padding: "8px 12px" }}
-                    />
-                  </div>
-                </div>
-
-                {/* 2. City Data Sources (Min 2, Max 5) */}
-                <div>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "5px" }}>
-                    <label style={{ fontSize: "12px", fontWeight: 600, color: "#0f172a" }}>
-                      Data Sources <span style={{ fontSize: "11px", fontWeight: 500, color: "#64748b" }}>(Min 2, Max 5)</span>:
-                    </label>
-                    <span style={{
-                      fontSize: "10.5px",
-                      fontWeight: 650,
-                      padding: "2px 8px",
-                      borderRadius: "6px",
-                      background: newDataSources.filter(s => s.trim().length > 0).length >= 2 ? "#dcfce7" : "#fee2e2",
-                      color: newDataSources.filter(s => s.trim().length > 0).length >= 2 ? "#15803d" : "#dc2626",
-                      border: `1px solid ${newDataSources.filter(s => s.trim().length > 0).length >= 2 ? "#bbf7d0" : "#fecaca"}`
-                    }}>
-                      {newDataSources.length} / 5 Sources
-                    </span>
-                  </div>
-
-                  <span style={{ fontSize: "11px", color: "#64748b", display: "block", marginBottom: "8px", fontWeight: 500 }}>
-                    Official portals, news bulletins or festival committees where AI monitors upcoming demand.
-                  </span>
-
-                  <div style={{ display: "flex", flexDirection: "column", gap: "8px", maxHeight: "175px", overflowY: "auto", paddingRight: "4px" }}>
-                    {newDataSources.map((src, index) => (
-                      <div key={index} style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                        <span style={{
-                          width: "22px",
-                          height: "22px",
-                          borderRadius: "4px",
-                          background: "#f8fafc",
-                          border: "1px solid #e2e8f0",
-                          color: "#64748b",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          fontSize: "11px",
-                          fontWeight: 600,
-                          flexShrink: 0
-                        }}>
-                          {index + 1}
-                        </span>
-                        <input
-                          type="text"
-                          value={src}
-                          onChange={(e) => handleSourceChange(index, e.target.value)}
-                          placeholder={index === 0 ? "e.g. District Tourism & Culture Portal" : index === 1 ? "e.g. Local Daily Events & News Bulletin" : `Data Source ${index + 1}`}
-                          required={index < 2}
-                          style={{
-                            flex: 1,
-                            fontSize: "12px",
-                            border: "1px solid #cbd5e1",
-                            borderRadius: "6px",
-                            padding: "6px 10px",
-                            color: "#0f172a",
-                            background: "#ffffff"
-                          }}
-                        />
-                        {newDataSources.length > 2 && (
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveSource(index)}
-                            style={{
-                              background: "#fef2f2",
-                              border: "1px solid #fee2e2",
-                              color: "#dc2626",
-                              borderRadius: "6px",
-                              width: "26px",
-                              height: "26px",
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              cursor: "pointer",
-                              flexShrink: 0
-                            }}
-                            title="Remove this source"
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-
-                  {newDataSources.length < 5 && (
-                    <button
-                      type="button"
-                      onClick={handleAddSource}
-                      style={{
-                        marginTop: "8px",
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: "5px",
-                        fontSize: "11.5px",
-                        fontWeight: 600,
-                        background: "#ffffff",
-                        border: "1px dashed #cbd5e1",
-                        padding: "5px 12px",
-                        borderRadius: "6px",
-                        cursor: "pointer",
-                        color: "#475569"
-                      }}
-                    >
-                      <Plus size={12} />
-                      <span>Add Data Source ({5 - newDataSources.length} slots left)</span>
-                    </button>
-                  )}
-                </div>
-
-                {/* Action Buttons */}
-                <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "4px", borderTop: "1px solid #f1f5f9", paddingTop: "12px" }}>
-                  <button
-                    type="button"
-                    onClick={() => setShowAddCityModal(false)}
-                    style={{
-                      background: "#ffffff",
-                      border: "1px solid #cbd5e1",
-                      borderRadius: "8px",
-                      padding: "7px 16px",
-                      color: "#475569",
-                      fontWeight: 600,
-                      cursor: "pointer",
-                      fontSize: "12px"
-                    }}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={addingCity || newDataSources.filter(s => s.trim().length > 0).length < 2}
-                    style={{
-                      background: "#0f172a",
-                      border: "1px solid #0f172a",
-                      color: "#ffffff",
-                      fontWeight: 600,
-                      padding: "7px 18px",
-                      borderRadius: "8px",
-                      fontSize: "12px",
-                      cursor: "pointer",
-                      opacity: (addingCity || newDataSources.filter(s => s.trim().length > 0).length < 2) ? 0.6 : 1,
-                      boxShadow: "0 1px 2px rgba(0,0,0,0.05)"
-                    }}
-                  >
-                    {addingCity ? "Creating City..." : "Save City & Radar"}
-                  </button>
-                </div>
-              </form>
-            </motion.div>
+              <div>
+                <h1 style={{ margin: 0, fontSize: "1.3rem", fontWeight: 700, letterSpacing: "-0.02em" }}>States &amp; Cities</h1>
+                <p style={{ margin: "3px 0 0", fontSize: "12.5px", color: "#64748b", fontWeight: 500 }}>
+                  All-India and {cityRegions.length} cities. Click a card to open its festival calendar and register festivals.
+                </p>
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: "6px", border: "1px solid #cbd5e1", borderRadius: "8px", padding: "6px 10px", background: "#ffffff" }}>
+                <Search size={13} style={{ color: "#94a3b8" }} />
+                <input
+                  type="search"
+                  value={regionQuery}
+                  onChange={(e) => setRegionQuery(e.target.value)}
+                  placeholder="Search city or state"
+                  aria-label="Search cities and states"
+                  style={{ border: "none", outline: "none", fontSize: "12.5px", width: "160px", background: "transparent", color: "#0f172a" }}
+                />
+              </label>
+              <button type="button" onClick={() => setShowAddCity(true)} style={btnDark}>
+                <Plus size={13} />
+                Add City
+              </button>
+              <button type="button" onClick={fetchCities} disabled={loadingCities} title="Reload" aria-label="Reload regions" style={{ ...btnLight, padding: "7px 10px" }}>
+                <RefreshCw size={12} className={loadingCities ? "spin" : ""} />
+              </button>
+            </div>
           </div>
-        )}
-      </AnimatePresence>
 
-      {/* MODAL: AUTONOMOUS AI AGENT WEBSITE CRAWLER & FESTIVAL RADAR */}
-      <AnimatePresence>
-        {showCrawlModal && (
-          <div style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(15, 23, 42, 0.45)",
-            backdropFilter: "blur(4px)",
-            zIndex: 1200,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: "1rem"
-          }}>
-            <motion.div
-              initial={{ opacity: 0, scale: 0.94, y: 12 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.94, y: 12 }}
-              style={{
-                background: "#ffffff",
-                border: "1px solid #e2e8f0",
-                borderRadius: "16px",
-                padding: "24px",
-                maxWidth: "540px",
-                width: "100%",
-                boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.25)",
-                color: "#0f172a"
-              }}
-            >
-              {/* Modal Header */}
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #f1f5f9", paddingBottom: "14px", marginBottom: "16px" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                  <div style={{
-                    width: "36px",
-                    height: "36px",
-                    borderRadius: "10px",
-                    background: "#eff6ff",
-                    border: "1px solid #dbeafe",
-                    color: "#2563eb",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center"
-                  }}>
-                    <Bot size={20} />
+          {loadingCities && cities.length === 0 ? (
+            <p style={{ fontSize: "12.5px", color: "#64748b" }}>Loading regions…</p>
+          ) : regionGroups.length === 0 ? (
+            <p style={{ fontSize: "12.5px", color: "#64748b" }}>No city or state matches “{regionQuery}”.</p>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
+              {regionGroups.map((g) => (
+                <section key={g.title}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
+                    <span style={{ ...smallHeading, letterSpacing: "0.06em" }}>{g.title}</span>
+                    <span style={{ fontSize: "11px", color: "#94a3b8" }}>{g.subtitle}</span>
                   </div>
-                  <div>
-                    <h3 style={{ margin: 0, fontSize: "16px", fontWeight: 700, color: "#0f172a" }}>
-                      Autonomous Event Radar &amp; Web Reader
-                    </h3>
-                    <span style={{ fontSize: "11.5px", color: "#64748b", fontWeight: 500 }}>
-                      {batchScanning
-                        ? `Processing City ${currentCityIndex + 1} of ${ALL_MARKETING_CITIES.length}: ${currentBatchCity}`
-                        : `Reading official portals for ${selectedCity} one by one`}
-                    </span>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(168px, 1fr))", gap: "10px" }}>
+                    {g.items.map(regionCard)}
                   </div>
+                </section>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ===================== REGION CALENDAR PAGE ===================== */}
+      {mode === "regions" && selectedCity && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "12px", height: "calc(100vh - 118px)", minHeight: "560px", marginBottom: "-56px" }}>
+          <div style={{ ...card, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px", padding: "8px 12px", flexShrink: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0, flex: "1 1 320px" }}>
+              <button type="button" onClick={() => navigate("/advertisement/regions")} title="All States & Cities" aria-label="Back to all states and cities" style={{ ...btnLight, padding: "6px 8px" }}>
+                <ChevronLeft size={15} />
+              </button>
+              <div style={{ width: "32px", height: "32px", borderRadius: "9px", background: "#eff6ff", border: "1px solid #dbeafe", color: "#2563eb", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                {isIndiaSelected ? <Globe size={16} /> : <MapPin size={16} />}
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <h2 style={{ margin: 0, fontSize: "15px", fontWeight: 700, whiteSpace: "nowrap" }}>{regionLabel} Festival Calendar</h2>
+                  <span style={{ background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1d4ed8", fontSize: "10.5px", fontWeight: 650, padding: "2px 8px", borderRadius: "12px", whiteSpace: "nowrap" }}>
+                    {isIndiaSelected ? "National" : selectedRegion?.state || "City"}
+                  </span>
                 </div>
-
+                <div
+                  title={isIndiaSelected && finder?.last_run ? finder.last_run.summary : undefined}
+                  style={{ fontSize: "11.5px", color: "#64748b", fontWeight: 500, marginTop: "2px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+                >
+                  {isIndiaSelected && finder
+                    ? finder.running
+                      ? `Festival search running · ${finder.step || "starting"}…`
+                      : !finder.configured
+                      ? "Find Festivals needs OPENROUTER_API_KEY in backend/.env."
+                      : finder.last_run
+                      ? `Last search ${finder.last_run.ran_at.slice(0, 10)}: ${finder.last_run.summary}${finder.next_due ? ` Next due ${finder.next_due}.` : ""}`
+                      : `Searches ${finder.source} for ${finder.window.join(", ")} with ${finder.model}. Every result needs your approval.`
+                    : "Click a date to register a festival (name, description and coupon code)."}
+                </div>
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+              {isIndiaSelected && (
                 <button
                   type="button"
-                  onClick={() => setShowCrawlModal(false)}
-                  style={{ background: "transparent", border: "none", cursor: "pointer", color: "#64748b", padding: "4px" }}
-                >
-                  <X size={18} />
-                </button>
-              </div>
-
-              {/* Multi-City Sequence Queue Pills */}
-              {batchScanning && (
-                <div style={{ display: "flex", gap: "5px", flexWrap: "wrap", marginBottom: "14px" }}>
-                  {ALL_MARKETING_CITIES.map((c, idx) => {
-                    const isPast = idx < currentCityIndex;
-                    const isNow = idx === currentCityIndex;
-                    return (
-                      <span
-                        key={c}
-                        style={{
-                          fontSize: "10.5px",
-                          fontWeight: 700,
-                          padding: "2px 8px",
-                          borderRadius: "6px",
-                          background: isNow ? "#eff6ff" : isPast ? "#f0fdf4" : "#f8fafc",
-                          border: isNow ? "1.5px solid #bfdbfe" : isPast ? "1px solid #bbf7d0" : "1px solid #e2e8f0",
-                          color: isNow ? "#1d4ed8" : isPast ? "#15803d" : "#94a3b8",
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: "3px",
-                        }}
-                      >
-                        {isPast ? "✓" : isNow ? "●" : ""}
-                        <span>{c}</span>
-                      </span>
-                    );
-                  })}
-                </div>
-              )}
-
-              {/* Progress Bar */}
-              <div style={{ width: "100%", height: "4px", background: "#f1f5f9", borderRadius: "2px", overflow: "hidden", marginBottom: "16px" }}>
-                <motion.div
+                  onClick={startFinder}
+                  disabled={!finder?.configured || finder.running || startingFinder}
+                  title={
+                    finder?.configured
+                      ? `Read ${finder.source} for ${finder.window.join(", ")}; ${finder.model} picks the major festivals for your approval`
+                      : "Add OPENROUTER_API_KEY to backend/.env to enable"
+                  }
                   style={{
-                    height: "100%",
-                    background: crawlStep >= 4 ? "#16a34a" : "#2563eb"
+                    ...btnDark,
+                    background: finder?.due ? "#2563eb" : "#0f172a",
+                    border: finder?.due ? "1px solid #2563eb" : "1px solid #0f172a",
+                    opacity: !finder?.configured ? 0.55 : 1,
+                    cursor: finder?.running || startingFinder ? "wait" : !finder?.configured ? "not-allowed" : "pointer",
                   }}
-                  initial={{ width: "20%" }}
-                  animate={{
-                    width: crawlStep === 1 ? "40%" : crawlStep === 2 ? "70%" : crawlStep === 3 ? "90%" : "100%"
-                  }}
-                  transition={{ duration: 0.4 }}
-                />
+                >
+                  {finder?.running || startingFinder ? <RefreshCw size={13} className="spin" /> : <Sparkles size={13} />}
+                  {finder?.running ? "Searching…" : "Find Festivals"}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={startScan}
+                disabled={scan?.running || startingScan}
+                title={
+                  scan
+                    ? `Poster agent: create a poster for every approved festival from ${scan.window_start} to ${scan.window_end} that has none (${scan.image_model})`
+                    : "Create posters for this month and the next two"
+                }
+                style={{
+                  ...btnDark,
+                  background: scan && scan.waiting > 0 ? "#7c3aed" : "#0f172a",
+                  border: scan && scan.waiting > 0 ? "1px solid #7c3aed" : "1px solid #0f172a",
+                  cursor: scan?.running || startingScan ? "wait" : "pointer",
+                }}
+              >
+                {scan?.running || startingScan ? <RefreshCw size={13} className="spin" /> : <ImageIcon size={13} />}
+                {scan?.running
+                  ? `Posters ${scan.done}/${scan.total}…`
+                  : `Create Posters${scan && scan.waiting > 0 ? ` (${scan.waiting})` : ""}`}
+              </button>
+              <button type="button" onClick={goToday} style={btnLight}>Today</button>
+              <button type="button" onClick={() => shiftMonth(-1)} aria-label="Previous month" style={{ ...btnLight, padding: "6px 9px" }}>
+                <ChevronLeft size={16} />
+              </button>
+              <span style={{ fontWeight: 700, fontSize: "14px", minWidth: "125px", textAlign: "center" }}>
+                {MONTH_NAMES[calMonth]} {calYear}
+              </span>
+              <button type="button" onClick={() => shiftMonth(1)} aria-label="Next month" style={{ ...btnLight, padding: "6px 9px" }}>
+                <ChevronRight size={16} />
+              </button>
+            </div>
+          </div>
+
+          {/* Calendar and day panel fill the rest of the screen: no page scroll */}
+          <div style={{ display: "grid", gridTemplateColumns: showPoster ? "minmax(0, 1fr) minmax(0, 1.2fr)" : "minmax(0, 1.4fr) minmax(0, 0.8fr)", gap: "12px", flex: 1, minHeight: 0 }}>
+            <div style={{ ...card, padding: "12px 14px", display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px", gap: "8px", flexWrap: "wrap" }}>
+                <span style={{ display: "flex", alignItems: "center", gap: "8px", fontWeight: 700, fontSize: "14px" }}>
+                  <CalendarIcon size={16} style={{ color: "#2563eb" }} />
+                  {MONTH_NAMES[calMonth]} {calYear} Schedule
+                  {loadingEvents && <RefreshCw size={12} className="spin" style={{ color: "#2563eb" }} />}
+                </span>
+                <span style={{ fontSize: "11.5px", color: "#64748b", fontWeight: 500, display: "inline-flex", alignItems: "center", gap: "12px" }}>
+                  {isIndiaSelected && (
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                      <span style={{ width: "10px", height: "10px", borderRadius: "3px", background: "#fef9c3", border: "1px solid #fde68a" }} />
+                      Awaiting approval
+                    </span>
+                  )}
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                    <span style={{ width: "10px", height: "10px", borderRadius: "3px", background: "#dcfce7", border: "1px solid #bbf7d0" }} />
+                    {isIndiaSelected ? "Approved" : "Registered"}
+                  </span>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                    <span style={{ width: "10px", height: "10px", borderRadius: "3px", background: "#e2e8f0", border: "1px solid #cbd5e1" }} />
+                    Completed
+                  </span>
+                  <span>Selected: <b style={{ color: "#0f172a" }}>{selectedDateStr}</b></span>
+                </span>
               </div>
 
-              {/* Sequential Steps List */}
-              <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginBottom: "18px" }}>
-                {selectedCitySources.map((url, idx) => {
-                  const isDone = crawlStep > idx + 1 || crawlStep === 4;
-                  const isCurrent = (crawlStep === idx + 1);
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: "5px", marginBottom: "6px", textAlign: "center" }}>
+                {WEEKDAY_NAMES.map((d) => (
+                  <div key={d} style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", padding: "4px 0", background: "#f8fafc", border: "1px solid #f1f5f9", borderRadius: "6px" }}>
+                    {d}
+                  </div>
+                ))}
+              </div>
 
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gridAutoRows: "minmax(0, 1fr)", gap: "5px", flex: 1, minHeight: 0 }}>
+                {calendarDays.map((cell, idx) => {
+                  const inMonth = !!cell.dateStr;
+                  const selected = inMonth && cell.dateStr === selectedDateStr;
+                  const isToday = cell.dateStr === todayIso;
+                  const cellDone = cell.events.length > 0 && cell.events.every((ev) => isCompleted(ev, todayIso));
                   return (
                     <div
                       key={idx}
+                      onClick={() => inMonth && setSelectedDateStr(cell.dateStr)}
                       style={{
-                        padding: "10px 14px",
-                        borderRadius: "10px",
-                        background: isCurrent ? "#eff6ff" : isDone ? "#f0fdf4" : "#f8fafc",
-                        border: isCurrent ? "1px solid #bfdbfe" : isDone ? "1px solid #bbf7d0" : "1px solid #e2e8f0",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "10px"
+                        minWidth: 0, overflow: "hidden", boxSizing: "border-box", borderRadius: "8px", padding: "4px 6px",
+                        display: "flex", flexDirection: "column", gap: "2px",
+                        background: !inMonth ? "#fcfcfc" : selected ? (cellDone ? "#f1f5f9" : "#f0fdf4") : cellDone ? "#f8fafc" : "#ffffff",
+                        border: selected ? (cellDone ? "1.5px solid #64748b" : "1.5px solid #16a34a") : isToday ? "1px solid #93c5fd" : "1px solid #f1f5f9",
+                        opacity: inMonth ? 1 : 0.35,
+                        cursor: inMonth ? "pointer" : "default",
                       }}
                     >
-                      {isDone ? (
-                        <CheckCircle2 size={16} style={{ color: "#16a34a", flexShrink: 0 }} />
-                      ) : isCurrent ? (
-                        <RefreshCw size={15} className="spin" style={{ color: "#2563eb", flexShrink: 0 }} />
-                      ) : (
-                        <Clock size={15} style={{ color: "#94a3b8", flexShrink: 0 }} />
-                      )}
-
-                      <div style={{ minWidth: 0, flex: 1 }}>
-                        <div style={{ fontSize: "12px", fontWeight: 650, color: "#0f172a", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                          Step {idx + 1}: Reading {url}
-                        </div>
-                        <div style={{ fontSize: "11px", color: isDone ? "#15803d" : "#64748b", fontWeight: 500 }}>
-                          {isDone ? "● Scanned (HTTP 200) · Extracted official notices & festival calendar" : isCurrent ? "Connecting & extracting regional bulletins..." : "Queued in sequence"}
-                        </div>
-                      </div>
+                      <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "4px" }}>
+                        <span style={{ fontSize: "12px", fontWeight: 650, color: cellDone ? "#64748b" : selected ? "#15803d" : isToday ? "#2563eb" : "#0f172a" }}>{cell.dayNumber}</span>
+                        {cellDone && (
+                          <span title="Completed" style={{ display: "inline-flex", alignItems: "center", gap: "3px", fontSize: "9.5px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                            <CheckCircle2 size={10} /> Done
+                          </span>
+                        )}
+                      </span>
+                      {cell.events.map((ev) => {
+                        const done = isCompleted(ev, todayIso);
+                        return (
+                        <span
+                          key={ev.id}
+                          title={`${ev.title}${done ? " · completed" : isPending(ev) ? " · awaiting approval" : ""}`}
+                          style={{
+                            background: done ? "#e2e8f0" : isPending(ev) ? "#fef9c3" : "#dcfce7",
+                            color: done ? "#475569" : isPending(ev) ? "#a16207" : "#15803d",
+                            border: done ? "1px solid #cbd5e1" : isPending(ev) ? "1px solid #fde68a" : "1px solid #bbf7d0",
+                            borderRadius: "4px", padding: "2px 5px", fontSize: "10px", fontWeight: 600, lineHeight: 1.2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+                        >
+                          {done ? `✓ ${ev.title}` : ev.title}
+                        </span>
+                        );
+                      })}
                     </div>
                   );
                 })}
+              </div>
+            </div>
 
-                {/* Synthesis Step */}
-                <div style={{
-                  padding: "10px 14px",
-                  borderRadius: "10px",
-                  background: crawlStep === 4 ? "#f0fdf4" : crawlStep === 3 ? "#eff6ff" : "#f8fafc",
-                  border: crawlStep === 4 ? "1px solid #bbf7d0" : crawlStep === 3 ? "1px solid #bfdbfe" : "1px solid #e2e8f0",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "10px"
-                }}>
-                  {crawlStep === 4 ? (
-                    <CheckCircle2 size={16} style={{ color: "#16a34a", flexShrink: 0 }} />
-                  ) : crawlStep === 3 ? (
-                    <RefreshCw size={15} className="spin" style={{ color: "#2563eb", flexShrink: 0 }} />
-                  ) : (
-                    <Clock size={15} style={{ color: "#94a3b8", flexShrink: 0 }} />
-                  )}
-
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={{ fontSize: "12px", fontWeight: 650, color: "#0f172a" }}>
-                      AI Marketing Strategy &amp; WhatsApp Promo Generation
-                    </div>
-                    <div style={{ fontSize: "11px", color: crawlStep === 4 ? "#15803d" : "#64748b", fontWeight: 500 }}>
-                      {crawlStep === 4
-                        ? `Identified demand spikes, created promo coupons, and updated ${selectedCity} calendar.`
-                        : "Detecting festival dates, demand spikes & target services..."}
-                    </div>
+            <div style={{ ...card, padding: "12px 14px", display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px", borderBottom: "1px solid #e2e8f0", paddingBottom: "8px", gap: "8px", flexShrink: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <Sparkles size={16} style={{ color: "#d97706" }} />
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: "14px", fontWeight: 700, display: "flex", alignItems: "center", gap: "8px" }}>
+                      {(showPoster || dayCompleted) && dayEvent ? dayEvent.title : "Register Festival"}
+                      {dayCompleted && (
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "11px", fontWeight: 700, color: "#475569", background: "#e2e8f0", borderRadius: "999px", padding: "2px 9px" }}>
+                          <CheckCircle2 size={11} /> Completed
+                        </span>
+                      )}
+                    </h3>
+                    <span style={{ fontSize: "11.5px", color: "#64748b", fontWeight: 500 }}>{regionLabel} · {dayCompleted ? "festival is over · poster kept for reference" : showPoster ? "poster and offer" : "festival for this day"}</span>
                   </div>
                 </div>
+                <span style={{ background: "#f8fafc", border: "1px solid #e2e8f0", fontWeight: 650, fontSize: "11.5px", padding: "3px 10px", borderRadius: "12px", whiteSpace: "nowrap" }}>
+                  {selectedDateStr}
+                </span>
               </div>
-
-              {/* Discovered Summary Box */}
-              {crawlStep === 4 && scanReport && (
-                <motion.div
-                  initial={{ opacity: 0, y: 6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  style={{
-                    background: "#f0fdf4",
-                    border: "1px solid #bbf7d0",
-                    borderRadius: "10px",
-                    padding: "12px 14px",
-                    marginBottom: "16px"
-                  }}
-                >
-                  <div style={{ fontSize: "12.5px", fontWeight: 700, color: "#15803d", marginBottom: "4px" }}>
-                    🎉 {scanReport.events_discovered.length} Festival / Event Surges Discovered in {selectedCity}
+              {showPoster && dayEvent ? (
+                <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.15fr) minmax(0, 1fr)", gap: "14px", flex: 1, minHeight: 0 }}>
+                  <div style={{ minHeight: 0, minWidth: 0 }}>
+                    <FestivalPosterCard
+                      event={dayEvent}
+                      selectedCity={regionLabel}
+                      selectedDateStr={selectedDateStr}
+                      isIndiaSelected={isIndiaSelected}
+                      fill
+                      completed={dayCompleted}
+                      onRegenerate={() => retryPoster(dayEvent)}
+                    />
                   </div>
-                  <div style={{ fontSize: "11.5px", color: "#166534", lineHeight: 1.45, fontWeight: 500 }}>
-                    {scanReport.events_discovered.slice(0, 2).map((ev) => (
-                      <div key={ev.id} style={{ marginTop: "3px" }}>
-                        • <b>{ev.title}</b> ({ev.date_start}) — <i>{ev.demand_surge}</i> · Coupon: <b>{ev.discount_code}</b>
-                      </div>
-                    ))}
-                  </div>
-                </motion.div>
+                  <div style={{ minHeight: 0, minWidth: 0, overflowY: "auto", paddingRight: "2px" }}>{dayPanel}</div>
+                </div>
+              ) : (
+                <div style={{ flex: 1, minHeight: 0, overflowY: "auto", paddingRight: "2px" }}>{dayPanel}</div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
 
-              {/* Action Buttons */}
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px" }}>
-                {batchScanning ? (
-                  <button
-                    type="button"
-                    onClick={handleStopProcess}
-                    style={{
-                      padding: "8px 14px",
-                      background: "#fef2f2",
-                      border: "1.5px solid #fecaca",
-                      borderRadius: "8px",
-                      color: "#dc2626",
-                      fontSize: "12px",
-                      fontWeight: 700,
-                      cursor: "pointer",
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: "6px",
-                    }}
-                  >
-                    <Square size={13} fill="#dc2626" />
-                    <span>Stop Process</span>
-                  </button>
-                ) : <div />}
-
-                <button
-                  type="button"
-                  onClick={() => setShowCrawlModal(false)}
-                  style={{
-                    padding: "8px 18px",
-                    background: "#0f172a",
-                    border: "1px solid #0f172a",
-                    borderRadius: "8px",
-                    color: "#ffffff",
-                    fontSize: "12.5px",
-                    fontWeight: 650,
-                    cursor: "pointer",
-                    boxShadow: "0 1px 2px rgba(0,0,0,0.05)"
-                  }}
-                >
-                  {crawlStep === 4 ? "View Updated City Calendar" : "Close Radar"}
+      {/* ===================== ADD CITY ===================== */}
+      <AnimatePresence>
+        {showAddCity && (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(15, 23, 42, 0.5)", backdropFilter: "blur(4px)", zIndex: 1200, display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}>
+            <motion.form
+              onSubmit={addCity}
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              style={{ ...card, maxWidth: "420px", width: "100%", padding: "22px", display: "flex", flexDirection: "column", gap: "14px", boxShadow: "0 20px 50px rgba(0,0,0,0.15)" }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <h3 style={{ margin: 0, fontSize: "15px", fontWeight: 700 }}>Add City</h3>
+                <button type="button" onClick={() => setShowAddCity(false)} aria-label="Close" style={{ background: "transparent", border: "none", cursor: "pointer", color: "#64748b" }}>
+                  <X size={18} />
                 </button>
               </div>
-            </motion.div>
+              <label style={fieldLabel}>
+                City
+                <input
+                  value={newCity.name}
+                  onChange={(e) => setNewCity((c) => ({ ...c, name: e.target.value }))}
+                  placeholder="e.g. Khammam"
+                  autoFocus
+                  required
+                  style={field}
+                />
+              </label>
+              <label style={fieldLabel}>
+                State
+                <input
+                  value={newCity.state}
+                  onChange={(e) => setNewCity((c) => ({ ...c, state: e.target.value }))}
+                  placeholder="e.g. Telangana"
+                  list="advert-state-names"
+                  required
+                  style={field}
+                />
+                <datalist id="advert-state-names">
+                  {stateNames.map((s) => (
+                    <option key={s} value={s} />
+                  ))}
+                </datalist>
+              </label>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
+                <button type="button" onClick={() => setShowAddCity(false)} style={btnLight}>Cancel</button>
+                <button type="submit" disabled={addingCity} style={btnDark}>
+                  {addingCity ? <RefreshCw size={12} className="spin" /> : <Plus size={13} />}
+                  {addingCity ? "Adding…" : "Add City"}
+                </button>
+              </div>
+            </motion.form>
           </div>
         )}
       </AnimatePresence>
-
-      {/* BIG HOVERING ANIMATED FLOATING AI AGENT BUTTON */}
-      <FloatingAIAgent
-        onStartProcess={handleStartProcess}
-        onStopProcess={handleStopProcess}
-        onScanEvents={handleTriggerScan}
-        onRefreshEvents={() => fetchEvents(selectedCity)}
-        onOpenCalendar={() => openCityCalendar("All-India")}
-        scanning={scanning || batchScanning}
-        activeCity={currentBatchCity}
-        currentCityIndex={currentCityIndex}
-        totalCities={ALL_MARKETING_CITIES.length}
-        selectedCity={selectedCity}
-      />
     </div>
   );
 }

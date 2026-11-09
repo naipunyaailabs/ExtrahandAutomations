@@ -95,10 +95,34 @@ def config(db: Session = Depends(get_db)):
         "ivr_max_prompts": s.ivr_max_prompts,
         "sync_interval_seconds": s.sync_interval_seconds,
         "whatsapp_enabled": getattr(s, "whatsapp_enabled", True),
-        "whatsapp_gateway_url": getattr(s, "whatsapp_gateway_url", "http://localhost:2785"),
-        "whatsapp_simulated": getattr(s, "whatsapp_simulated", True),
+        "whatsapp_gateway_url": s.whatsapp_gateway_url,
+        "whatsapp_simulated": s.whatsapp_simulated,
+        "branding": public_branding(),
         "runtime": runtime_settings_dict(db),
     }
+
+
+def public_branding() -> dict:
+    """Brand and locale values the UI needs (no secrets)."""
+    s = get_settings()
+    return {
+        "company_name": s.company_name,
+        "website_url": s.website_url,
+        "logo_url": s.brand_logo_url,
+        "booking_url": s.booking_url,
+        "offers_url": s.offers_url,
+        "task_url_template": s.task_url_template,
+        "bulk_message_template": s.bulk_message_template,
+        "default_country_code": s.default_country_code,
+        "currency_code": s.currency_code,
+        "currency_symbol": s.currency_symbol,
+    }
+
+
+@router.get("/public-config")
+def public_config():
+    """Branding for screens shown before login."""
+    return public_branding()
 
 
 class RuntimeUpdate(BaseModel):

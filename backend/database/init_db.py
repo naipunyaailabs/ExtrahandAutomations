@@ -11,7 +11,7 @@ Usage:
     python database/init_db.py
     python database/init_db.py --sync
     python database/init_db.py --reset
-    python database/init_db.py --dbname INT --user postgres --password Manohar
+    python database/init_db.py --dbname INT --user postgres --password <your-password>
 """
 
 import argparse

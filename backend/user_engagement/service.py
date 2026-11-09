@@ -7,24 +7,24 @@ Encapsulates all calculations for:
 """
 
 import csv
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import io
 import logging
+import re
 from typing import Any, Dict, List, Optional
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models import (
     CallAttempt,
+    Customer,
     CustomerFeedback,
-    DispatchRun,
-    Escalation,
     Helper,
     Ticket,
     utcnow,
 )
-from app.services.common import runtime_settings
-from .models import OperationalPerformanceKPIs, EngagementOverview
+from app.config import get_settings
+from .models import OperationalPerformanceKPIs
 
 logger = logging.getLogger("user_engagement.service")
 
@@ -54,14 +54,10 @@ def get_operational_kpis(db: Session, days: int = 30) -> OperationalPerformanceK
     accepted_dispatches = dispatch_outcomes.get("accepted", 0)
     acceptance_rate = round((accepted_dispatches / total_dispatches * 100), 1) if total_dispatches > 0 else 0.0
 
-    # Fallback to realistic numbers if no dispatches have been run yet in local test DB
-    if total_volume > 0 and total_dispatches == 0 and acceptance_rate == 0.0:
-        acceptance_rate = 94.2  # Benchmark rate for verified helpers cascade
-
     return OperationalPerformanceKPIs(
-        total_volume=total_volume if total_volume > 0 else 555,
-        acceptance_rate=acceptance_rate if acceptance_rate > 0 else 94.2,
-        completion_rate=completion_rate if completion_rate > 0 else 33.0,
+        total_volume=total_volume,
+        acceptance_rate=acceptance_rate,
+        completion_rate=completion_rate,
         audit_ready=True,
         period_days=days,
         completed_tickets=completed_tickets,
@@ -98,9 +94,6 @@ def get_engagement_overview(db: Session, days: int = 30) -> Dict[str, Any]:
     # Estimated costs
     est_telephony_cost = round((total_call_seconds / 60) * 0.85, 2)
 
-    # User Tier Segmentation (Diamond, Gold, Silver across Monthly & Weekly)
-    segmentation = get_user_segmentation(db)
-
     return {
         "kpis": kpis.model_dump(),
         "period_days": days,
@@ -117,284 +110,7 @@ def get_engagement_overview(db: Session, days: int = 30) -> Dict[str, Any]:
         },
         "cost_summary": {
             "telephony_cost_inr": est_telephony_cost,
-            "currency": "INR",
-        },
-        "segmentation": segmentation,
-    }
-
-
-def get_user_segmentation(
-    db: Session,
-    tier_filter: Optional[str] = None,
-    period: str = "monthly",
-) -> Dict[str, Any]:
-    """Segregates customers into 3 Tiers based on Task Volume:
-    - Diamond: Monthly >= 30 tasks (30 to 200+) | Weekly >= 5 tasks
-    - Gold: Monthly 10 - 29 tasks | Weekly 3 - 4 tasks
-    - Silver: Monthly < 10 tasks | Weekly < 3 tasks
-    """
-    now = utcnow()
-    since_30d = now - timedelta(days=30)
-    since_7d = now - timedelta(days=7)
-
-    # 1. Fetch tickets to aggregate real task counts per customer
-    try:
-        tickets = db.query(Ticket).all()
-    except Exception as e:
-        logger.warning(f"Could not load tickets from database, falling back to sample users: {e}")
-        tickets = []
-
-    customers_map: Dict[str, Dict[str, Any]] = {}
-    for t in tickets:
-        key = (t.customer_phone or "").strip() or (t.customer_name or "").strip() or t.customer_id
-        if not key:
-            continue
-        if key not in customers_map:
-            customers_map[key] = {
-                "customer_id": t.customer_id or f"cust_{abs(hash(key)) % 100000}",
-                "name": t.customer_name or "Verified Customer",
-                "phone": t.customer_phone or "+91 98765 00001",
-                "email": t.customer_email or "",
-                "city": t.city or "Bengaluru",
-                "total_tasks": 0,
-                "monthly_tasks": 0,
-                "weekly_tasks": 0,
-                "categories": {},
-                "last_active": None,
-            }
-        c = customers_map[key]
-        c["total_tasks"] += 1
-        t_dt = t.created_at or now
-        if t_dt >= since_30d:
-            c["monthly_tasks"] += 1
-        if t_dt >= since_7d:
-            c["weekly_tasks"] += 1
-
-        cat = t.category or "General"
-        c["categories"][cat] = c["categories"].get(cat, 0) + 1
-        if c["last_active"] is None or (t.created_at and t.created_at > c["last_active"]):
-            c["last_active"] = t.created_at
-
-    # Seed realistic customer volume representation to demonstrate Diamond (30-200 tasks / 5+ weekly),
-    # Gold (10-30 tasks / 3-5 weekly), and Silver (<10 tasks / <3 weekly)
-    sample_power_users = [
-        {
-            "customer_id": "cust_dia_01",
-            "name": "Ramesh Enterprises",
-            "phone": "+91 98450 11223",
-            "email": "ramesh.mgmt@extrahand.in",
-            "city": "Bengaluru",
-            "total_tasks": 184,
-            "monthly_tasks": 48,
-            "weekly_tasks": 12,
-            "categories": {"Electrical": 22, "Plumbing": 18, "Cleaning": 8},
-            "last_active": now - timedelta(hours=3),
-        },
-        {
-            "customer_id": "cust_dia_02",
-            "name": "Priya Sharma",
-            "phone": "+91 98860 33445",
-            "email": "priya.sharma@gmail.com",
-            "city": "Hyderabad",
-            "total_tasks": 112,
-            "monthly_tasks": 34,
-            "weekly_tasks": 7,
-            "categories": {"Cooking": 20, "Cleaning": 14},
-            "last_active": now - timedelta(hours=6),
-        },
-        {
-            "customer_id": "cust_dia_03",
-            "name": "Vikram Rao",
-            "phone": "+91 99001 55667",
-            "email": "vikram.coliving@yahoo.com",
-            "city": "Bengaluru",
-            "total_tasks": 215,
-            "monthly_tasks": 62,
-            "weekly_tasks": 15,
-            "categories": {"Cleaning": 35, "AC Repair": 15, "Carpentry": 12},
-            "last_active": now - timedelta(hours=1),
-        },
-        {
-            "customer_id": "cust_gold_01",
-            "name": "Kiran Kumar",
-            "phone": "+91 98765 00004",
-            "email": "kiran.kumar@gmail.com",
-            "city": "Bengaluru",
-            "total_tasks": 42,
-            "monthly_tasks": 16,
-            "weekly_tasks": 4,
-            "categories": {"Cooking": 10, "Electrical": 6},
-            "last_active": now - timedelta(days=1),
-        },
-        {
-            "customer_id": "cust_gold_02",
-            "name": "Sneha Patel",
-            "phone": "+91 98112 44556",
-            "email": "sneha.p@outlook.com",
-            "city": "Hyderabad",
-            "total_tasks": 38,
-            "monthly_tasks": 12,
-            "weekly_tasks": 3,
-            "categories": {"Cleaning": 8, "Pest Control": 4},
-            "last_active": now - timedelta(days=2),
-        },
-        {
-            "customer_id": "cust_gold_03",
-            "name": "Karthik Venkat",
-            "phone": "+91 97400 99881",
-            "email": "karthik.v@gmail.com",
-            "city": "Bengaluru",
-            "total_tasks": 29,
-            "monthly_tasks": 11,
-            "weekly_tasks": 3,
-            "categories": {"AC Repair": 6, "Plumbing": 5},
-            "last_active": now - timedelta(days=3),
-        },
-        {
-            "customer_id": "cust_silv_01",
-            "name": "Ananya Das",
-            "phone": "+91 96200 11229",
-            "email": "ananya.das@gmail.com",
-            "city": "Bengaluru",
-            "total_tasks": 8,
-            "monthly_tasks": 3,
-            "weekly_tasks": 1,
-            "categories": {"Cooking": 3},
-            "last_active": now - timedelta(days=5),
-        },
-        {
-            "customer_id": "cust_silv_02",
-            "name": "Ravi Teja",
-            "phone": "+91 98490 88776",
-            "email": "ravi.teja@gmail.com",
-            "city": "Hyderabad",
-            "total_tasks": 6,
-            "monthly_tasks": 2,
-            "weekly_tasks": 0,
-            "categories": {"Electrician": 2},
-            "last_active": now - timedelta(days=12),
-        },
-        {
-            "customer_id": "cust_silv_03",
-            "name": "Pooja Hegde",
-            "phone": "+91 99455 33221",
-            "email": "pooja.h@yahoo.com",
-            "city": "Bengaluru",
-            "total_tasks": 4,
-            "monthly_tasks": 1,
-            "weekly_tasks": 1,
-            "categories": {"Gardening": 1},
-            "last_active": now - timedelta(days=18),
-        },
-        {
-            "customer_id": "cust_silv_04",
-            "name": "Rahul Nair",
-            "phone": "+91 98800 66554",
-            "email": "rahul.nair@hotmail.com",
-            "city": "Bengaluru",
-            "total_tasks": 2,
-            "monthly_tasks": 1,
-            "weekly_tasks": 0,
-            "categories": {"Carpentry": 1},
-            "last_active": now - timedelta(days=22),
-        },
-    ]
-
-    existing_phones = {c["phone"].replace(" ", "") for c in customers_map.values()}
-    for s_user in sample_power_users:
-        if s_user["phone"].replace(" ", "") not in existing_phones:
-            customers_map[s_user["customer_id"]] = s_user
-
-    # Compute Tiers for each customer
-    users_list = []
-    monthly_counts = {"diamond": 0, "gold": 0, "silver": 0}
-    weekly_counts = {"diamond": 0, "gold": 0, "silver": 0}
-
-    for c in customers_map.values():
-        m_tasks = c["monthly_tasks"]
-        w_tasks = c["weekly_tasks"]
-
-        # Monthly Criteria: Diamond >= 30 (30 to 200+ tasks), Gold 10-29 tasks, Silver < 10 tasks
-        if m_tasks >= 30:
-            m_tier = "diamond"
-        elif m_tasks >= 10:
-            m_tier = "gold"
-        else:
-            m_tier = "silver"
-
-        # Weekly Criteria: Diamond >= 5 tasks, Gold 3-4 tasks, Silver < 3 tasks
-        if w_tasks >= 5:
-            w_tier = "diamond"
-        elif w_tasks >= 3:
-            w_tier = "gold"
-        else:
-            w_tier = "silver"
-
-        monthly_counts[m_tier] += 1
-        weekly_counts[w_tier] += 1
-
-        top_cat = "General"
-        if c.get("categories"):
-            top_cat = max(c["categories"].items(), key=lambda x: x[1])[0]
-
-        last_active_str = c["last_active"].strftime("%d %b, %I:%M %p") if isinstance(c["last_active"], datetime) else (str(c["last_active"]) if c["last_active"] else "Recent")
-
-        user_item = {
-            "customer_id": c["customer_id"],
-            "name": c["name"],
-            "phone": c["phone"],
-            "email": c.get("email"),
-            "city": c.get("city", "Bengaluru"),
-            "total_tasks": c["total_tasks"],
-            "monthly_tasks": m_tasks,
-            "weekly_tasks": w_tasks,
-            "monthly_tier": m_tier,
-            "weekly_tier": w_tier,
-            "top_category": top_cat,
-            "last_active": last_active_str,
-        }
-        users_list.append(user_item)
-
-    total_u = len(users_list)
-    users_list.sort(key=lambda u: (u["monthly_tasks"], u["weekly_tasks"]), reverse=True)
-
-    filtered_users = users_list
-    if tier_filter and tier_filter.lower() in ("diamond", "gold", "silver"):
-        target_field = "weekly_tier" if period == "weekly" else "monthly_tier"
-        filtered_users = [u for u in users_list if u[target_field] == tier_filter.lower()]
-
-    return {
-        "total_users": total_u,
-        "monthly": {
-            "diamond": monthly_counts["diamond"],
-            "gold": monthly_counts["gold"],
-            "silver": monthly_counts["silver"],
-            "total": total_u,
-            "diamond_pct": round((monthly_counts["diamond"] / total_u * 100), 1) if total_u else 0.0,
-            "gold_pct": round((monthly_counts["gold"] / total_u * 100), 1) if total_u else 0.0,
-            "silver_pct": round((monthly_counts["silver"] / total_u * 100), 1) if total_u else 0.0,
-        },
-        "weekly": {
-            "diamond": weekly_counts["diamond"],
-            "gold": weekly_counts["gold"],
-            "silver": weekly_counts["silver"],
-            "total": total_u,
-            "diamond_pct": round((weekly_counts["diamond"] / total_u * 100), 1) if total_u else 0.0,
-            "gold_pct": round((weekly_counts["gold"] / total_u * 100), 1) if total_u else 0.0,
-            "silver_pct": round((weekly_counts["silver"] / total_u * 100), 1) if total_u else 0.0,
-        },
-        "users": filtered_users,
-        "criteria": {
-            "monthly": {
-                "diamond": "30+ tasks (High Volume: 30 to 200+)",
-                "gold": "10 to 30 tasks",
-                "silver": "Below 10 tasks (< 10)",
-            },
-            "weekly": {
-                "diamond": "5+ tasks per week",
-                "gold": "3 to 5 tasks per week",
-                "silver": "Below 3 tasks (< 3)",
-            },
+            "currency": get_settings().currency_code,
         },
     }
 
@@ -427,3 +143,223 @@ def generate_csv_export(db: Session, export_type: str = "bookings", days: int = 
 
     return output.getvalue()
 
+
+_REAL_ID = re.compile(r"[0-9a-f]{24}")
+SUCCESS_STATUSES = {"completed", "closed", "done"}
+FAIL_STATUSES = {"cancelled", "canceled", "failed", "expired", "rejected"}
+
+
+def classify_status(status: Optional[str]) -> str:
+    s = (status or "").strip().lower()
+    if s in SUCCESS_STATUSES:
+        return "success"
+    if s in FAIL_STATUSES:
+        return "fail"
+    return "pending"
+
+
+def _summarise(orders: List[Dict[str, Any]], today, month_start) -> Dict[str, Any]:
+    """Dashboard numbers from a list of normalised orders (each with customer key, created/scheduled IST dates)."""
+    def in_period(o: Dict[str, Any], start, end=None) -> bool:
+        days = [d for d in (o["created_day"], o["scheduled_day"]) if d]
+        return any(d >= start and (end is None or d <= end) for d in days)
+
+    month = [o for o in orders if in_period(o, month_start)]
+    today_orders = [o for o in orders if in_period(o, today, today)]
+    count = lambda rows, kind: sum(1 for o in rows if o["state_type"] == kind)  # noqa: E731
+    categories: Dict[str, int] = {}
+    sources: Dict[str, int] = {}
+    for o in today_orders:
+        categories[o["category"]] = categories.get(o["category"], 0) + 1
+        if o.get("booking_source"):
+            sources[o["booking_source"]] = sources.get(o["booking_source"], 0) + 1
+    today_orders.sort(key=lambda o: o.get("scheduled_at") or o.get("created_at") or "")
+    return {
+        "active_users_month": len({o["customer_key"] for o in month if o["customer_key"]}),
+        "active_users_today": len({o["customer_key"] for o in today_orders if o["customer_key"]}),
+        "today_orders_count": len(today_orders),
+        "today_success": count(today_orders, "success"),
+        "today_fail": count(today_orders, "fail"),
+        "today_pending": count(today_orders, "pending"),
+        "monthly_orders_count": len(month),
+        "monthly_success": count(month, "success"),
+        "monthly_fail": count(month, "fail"),
+        "monthly_pending": count(month, "pending"),
+        "today_orders": [{k: v for k, v in o.items() if k not in ("customer_key", "created_day", "scheduled_day", "category_slug")}
+                         for o in today_orders],
+        "categories_breakdown": categories,
+        "booking_sources": sources,
+    }
+
+
+def live_orders() -> Dict[str, Any]:
+    """Real-customer orders from ExtraHand (team-posted Works and test accounts left out), normalised.
+    Raises EngagementDataUnavailable when ExtraHand cannot be read."""
+    from .extrahand_data import IST, all_tasks, is_real_customer_work, parse_time, test_accounts
+
+    tests = test_accounts()
+    every_task, fetched = all_tasks()
+    tasks = [t for t in every_task if is_real_customer_work(t, tests)]
+    team_posted = sum(1 for t in every_task if t.get("isTeamPosted") is True or str(t.get("postedBy") or "").lower() == "team")
+    orders = []
+    for t in tasks:
+        created = parse_time(t.get("createdAt"))
+        scheduled = parse_time(t.get("scheduledDate"))
+        loc = t.get("location") if isinstance(t.get("location"), dict) else {}
+        status = str(t.get("status") or "open")
+        orders.append({
+            "id": str(t.get("taskId") or t.get("_id") or ""),
+            "title": t.get("title") or "Service Work",
+            "category": t.get("categoryLabel") or t.get("category") or "General",
+            "category_slug": str(t.get("categorySlug") or t.get("category") or "").lower(),
+            "status": status,
+            "state_type": classify_status(status),
+            "customer_name": t.get("customerName") or "Unknown",
+            "customer_phone": t.get("customerPhone") or "",
+            "city": loc.get("city") or "",
+            "area": loc.get("taskArea") or loc.get("area") or "",
+            "scheduled_at": scheduled.astimezone(IST).isoformat() if scheduled else None,
+            "scheduled_slot": " - ".join(x for x in (t.get("scheduledTimeStart"), t.get("scheduledTimeEnd")) if x),
+            "created_at": created.astimezone(IST).isoformat() if created else None,
+            "budget": float(t.get("budget") or t.get("paymentAmount") or 0),
+            "booking_source": t.get("bookingSource") or "",
+            "posted_by": t.get("postedBy") or "",
+            "helper_name": t.get("assignedHelperName") or t.get("assigneeName") or "",
+            "customer_key": str(t.get("CustomerId") or t.get("customerId") or t.get("requesterId")
+                                or t.get("customerPhone") or ""),
+            "created_day": created.astimezone(IST).date() if created else None,
+            "scheduled_day": scheduled.astimezone(IST).date() if scheduled else None,
+        })
+    return {
+        "orders": orders,
+        "source": "live",
+        "fetched_at": datetime.fromtimestamp(fetched, IST).isoformat(),
+        "excluded": {"team_posted_works": team_posted,
+                     "test_account_works": len(every_task) - team_posted - len(orders),
+                     "test_accounts": tests["count"], "test_account_names": tests["names"]},
+    }
+
+
+def local_orders(db: Session) -> Dict[str, Any]:
+    """The same orders from the local database copy (used only when ExtraHand is unavailable)."""
+    from .extrahand_data import IST
+
+    def ist_day(dt: Optional[datetime]):
+        if not dt:
+            return None
+        aware = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        return aware.astimezone(IST).date()
+
+    from .extrahand_data import is_test_name, parse_time
+
+    orders = []
+    for t in db.query(Ticket).all():
+        # only real ExtraHand Works (24-character ids): rows written from mock data (task_1008, ...) are skipped
+        if not _REAL_ID.fullmatch(t.id or ""):
+            continue
+        raw = t.raw if isinstance(t.raw, dict) else {}
+        # same rule as live: real customers only (no team-posted Works, no test accounts)
+        if raw.get("isTeamPosted") is True or str(raw.get("postedBy") or "").lower() == "team" or is_test_name(t.customer_name):
+            continue
+        # ExtraHand's own booking time (created_at in this table is when the row was copied)
+        booked = parse_time(raw.get("createdAt"))
+        booked_naive = booked.astimezone(timezone.utc).replace(tzinfo=None) if booked else t.created_at
+        orders.append({
+            "id": t.id,
+            "title": t.title or "Service Work",
+            "category": t.category or "General",
+            "category_slug": (t.category or "").lower(),
+            "status": t.status or "open",
+            "state_type": classify_status(t.status),
+            "customer_name": t.customer_name or "Unknown",
+            "customer_phone": t.customer_phone or "",
+            "city": t.city or "",
+            "area": "",
+            "scheduled_at": t.scheduled_at.isoformat() if t.scheduled_at else None,
+            "scheduled_slot": "",
+            "created_at": booked.astimezone(IST).isoformat() if booked else (t.created_at.isoformat() if t.created_at else None),
+            "budget": float(t.budget or 0.0),
+            "booking_source": t.booking_source or "",
+            "posted_by": "",
+            "helper_name": t.assignee_name or "",
+            "customer_key": t.customer_id or t.customer_phone or t.customer_name or "",
+            "created_day": ist_day(booked_naive),
+            "scheduled_day": ist_day(t.scheduled_at),
+        })
+    return {"orders": orders, "source": "local", "fetched_at": datetime.now(IST).isoformat(), "excluded": {}}
+
+
+def load_orders(db: Session) -> Dict[str, Any]:
+    """Real-customer orders: live from ExtraHand, or the local copy (with the reason) when it is unavailable."""
+    from .extrahand_data import EngagementDataUnavailable, live_enabled
+
+    reason = "EXTRAHAND_MODE is not 'live'"
+    if live_enabled():
+        try:
+            return live_orders()
+        except EngagementDataUnavailable as exc:
+            logger.warning("[User Engagement] Live ExtraHand data unavailable: %s", exc)
+            reason = str(exc)
+    data = local_orders(db)
+    data["reason"] = reason
+    return data
+
+
+def _live_dashboard(today, month_start) -> Dict[str, Any]:
+    from .extrahand_data import customers_summary, support_summary
+
+    data = live_orders()
+    orders, ex = data["orders"], data["excluded"]
+    customers = customers_summary()
+    result = _summarise(orders, today, month_start)
+    result.update({
+        "total_users": customers["total"],
+        "new_users_today": customers["new_today"],
+        "new_users_month": customers["new_month"],
+        "total_orders_all_time": len(orders),
+        "support": support_summary(),
+        "source": "live",
+        "source_note": (f"Live from ExtraHand: real customers only ({len(orders)} customer Works, "
+                        f"{customers['total']} customers). Left out: {ex['team_posted_works']} Works posted by the "
+                        f"ExtraHand team, {ex['test_account_works']} by test accounts, "
+                        f"and {ex['test_accounts']} test accounts."),
+        "excluded": ex,
+        "fetched_at": data["fetched_at"],
+        "refresh_seconds": 300,
+    })
+    return result
+
+
+def _local_dashboard(db: Session, today, month_start, reason: str) -> Dict[str, Any]:
+    data = local_orders(db)
+    orders = data["orders"]
+    result = _summarise(orders, today, month_start)
+    result.update({
+        "total_users": max(db.query(Customer).count(), len({o["customer_key"] for o in orders if o["customer_key"]})),
+        "new_users_today": None,
+        "new_users_month": None,
+        "total_orders_all_time": len(orders),
+        "support": {"available": False, "reason": "Only available from live ExtraHand data."},
+        "source": "local",
+        "source_note": f"Local database copy (ExtraHand live data unavailable: {reason[:160]})",
+        "fetched_at": data["fetched_at"],
+        "refresh_seconds": 300,
+    })
+    return result
+
+
+def get_engagement_dashboard(db: Session) -> Dict[str, Any]:
+    """User Engagement dashboard for today (India time): users, active users, today's orders and their outcome.
+    Live from the ExtraHand Main Admin API; the local database copy is used only when ExtraHand is unavailable."""
+    from .extrahand_data import EngagementDataUnavailable, live_enabled, now_ist
+
+    now = now_ist()
+    today, month_start = now.date(), now.date().replace(day=1)
+    base = {"today": today.isoformat(), "today_label": now.strftime("%A, %d %B %Y"), "timezone": "IST (UTC+05:30)"}
+    if live_enabled():
+        try:
+            return {**base, **_live_dashboard(today, month_start)}
+        except EngagementDataUnavailable as exc:
+            logger.warning("[User Engagement] Live ExtraHand data unavailable: %s", exc)
+            return {**base, **_local_dashboard(db, today, month_start, str(exc))}
+    return {**base, **_local_dashboard(db, today, month_start, "EXTRAHAND_MODE is not 'live'")}

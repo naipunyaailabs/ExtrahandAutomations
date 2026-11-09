@@ -1,17 +1,17 @@
-"""Marketing & Festival Advertisement Service (Service 3)
+"""Marketing & Festival Advertisement Service (Service 3).
 
-Exports the unified marketing router and service helpers.
+Festivals are registered by hand for All-India and each city; the poster agent designs their posters.
 """
 
-from .router import marketing_router, advestiment_router
-from .service import get_advestiment_service as get_marketing_service, get_advestiment_service
-from .agent import get_advestiment_agent as get_marketing_agent, get_advestiment_agent
+from .agent import AIPosterAgent, poster_agent
+from .router import advestiment_router, marketing_router
+from .service import get_advestiment_service, get_advestiment_service as get_marketing_service
 
 __all__ = [
     "marketing_router",
     "advestiment_router",
     "get_marketing_service",
     "get_advestiment_service",
-    "get_marketing_agent",
-    "get_advestiment_agent",
+    "AIPosterAgent",
+    "poster_agent",
 ]

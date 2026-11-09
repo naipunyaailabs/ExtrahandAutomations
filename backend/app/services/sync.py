@@ -10,6 +10,7 @@ from ..integrations.extrahand import ExtraHandError, ExtraHandSource, get_source
 from ..integrations.mapping import is_assigned, is_terminal, normalize_task, normalize_user
 from ..models import Customer, DispatchStatus, Event, Helper, Ticket, utcnow
 from .common import engine_lock, log_event
+from .real_data import is_real_task, is_real_user
 from .dispatch import active_run, cancel_dispatch, upsert_helper
 from .followups import cancel_for_ticket, schedule_for_ticket
 
@@ -56,7 +57,10 @@ def _helper_contact(db: Session, src: ExtraHandSource, helper_id: str) -> Helper
     if helper_id in _missing_users:
         return h
     try:
-        return upsert_helper(db, normalize_user(src.get_user(helper_id)) | {"id": helper_id})
+        raw = src.get_user(helper_id)
+        if not is_real_user(raw if isinstance(raw, dict) else {}, helper_id):
+            return h  # tester / test account: not saved as a helper
+        return upsert_helper(db, normalize_user(raw) | {"id": helper_id})
     except ExtraHandError as e:
         _missing_users.add(helper_id)
         log.debug("helper %s lookup on ExtraHand failed: %s", helper_id, e)
@@ -85,6 +89,9 @@ def sync_helpers(db: Session) -> dict:
         try:
             with engine_lock:
                 rec = normalize_user(raw)
+                if not is_real_user(raw, rec.get("id")):
+                    stats["skipped_test"] = stats.get("skipped_test", 0) + 1  # tester / test / mock account
+                    continue
                 if rec.get("id") and rec["id"] != "None":
                     upsert_helper(db, rec)
                     stats["saved"] += 1
@@ -111,7 +118,10 @@ def sync_tickets(db: Session) -> dict:
     try:
         items = src.iter_tasks()
     except ExtraHandError as e:
-        last_sync.update(at=utcnow(), ok=False, error=str(e))
+        err_msg = str(e)
+        if "version" in err_msg or "No matching document" in err_msg:
+            err_msg = "Temporary login collision on ExtraHand server (retrying shortly)"
+        last_sync.update(at=utcnow(), ok=False, error=err_msg)
         raise
     stats["fetched"] = len(items)
 
@@ -155,6 +165,10 @@ def sync_tickets(db: Session) -> dict:
 
 
 def _sync_one(db: Session, src: ExtraHandSource, raw: dict, stats: dict) -> None:
+    # Real customers only: Works posted by the ExtraHand team, test accounts and mock rows are not saved
+    if not is_real_task(raw):
+        stats["skipped_test"] = stats.get("skipped_test", 0) + 1
+        return
     rec = normalize_task(raw)
     if not rec["id"] or rec["id"] == "None":
         return
@@ -215,7 +229,7 @@ def _sync_one(db: Session, src: ExtraHandSource, raw: dict, stats: dict) -> None
                 t.assignee_phone = t.assignee_phone or h.phone
                 t.assignee_name = t.assignee_name or h.name
                 t.assignee_profile_id = t.assignee_profile_id or h.profile_id
-        elif not db.get(Helper, t.assignee_id):
+        elif not db.get(Helper, t.assignee_id) and is_real_user({"name": t.assignee_name}, t.assignee_id):
             upsert_helper(db, {
                 "id": t.assignee_id,
                 "name": t.assignee_name or "Assigned Helper",

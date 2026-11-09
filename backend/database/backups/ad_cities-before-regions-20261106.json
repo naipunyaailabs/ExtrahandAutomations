@@ -1,0 +1,112 @@
+[
+  {
+    "id": 2,
+    "city_name": "Siddipet",
+    "state": "Telangana",
+    "data_sources": "[\"https://epaper.siddipettimes.com/view/797/2-oct-26\", \"https://www.mee24news.com/epaper/telangana/siddipet\"]",
+    "top_demand_service": "Standby (Agent Idle)",
+    "featured_discount": "Standard Area Rate",
+    "is_national": 0,
+    "created_at": "2026-11-02 17:11:24",
+    "updated_at": "2026-11-04 14:41:07"
+  },
+  {
+    "id": 3,
+    "city_name": "Mahabubnagar",
+    "state": "Telangana",
+    "data_sources": "[\"https://epaper.prajapaksham.in/category/12/mahabubnagar-main?\", \"https://www.mee24news.com/epaper/telangana/mahbubnagar?\"]",
+    "top_demand_service": "Standby (Agent Idle)",
+    "featured_discount": "Standard Area Rate",
+    "is_national": 0,
+    "created_at": "2026-11-02 17:11:25",
+    "updated_at": "2026-11-04 14:41:07"
+  },
+  {
+    "id": 4,
+    "city_name": "Warangal",
+    "state": "Telangana",
+    "data_sources": "[\"https://www.mee24news.com/epaper/telangana/warangal?\", \"https://www.suryaepaper.com/category/32/warangal?\"]",
+    "top_demand_service": "Standby (Agent Idle)",
+    "featured_discount": "Standard Area Rate",
+    "is_national": 0,
+    "created_at": "2026-11-02 17:11:25",
+    "updated_at": "2026-11-04 14:41:07"
+  },
+  {
+    "id": 5,
+    "city_name": "Karimnagar",
+    "state": "Telangana",
+    "data_sources": "[\"https://epaper.prajapaksham.in/category/11/karimnagar-main?\", \"https://mee24news.com/epaper/telangana/karimnagar?\"]",
+    "top_demand_service": "Standby (Agent Idle)",
+    "featured_discount": "Standard Area Rate",
+    "is_national": 0,
+    "created_at": "2026-11-02 17:11:25",
+    "updated_at": "2026-11-04 14:41:07"
+  },
+  {
+    "id": 6,
+    "city_name": "Kalwakurthy",
+    "state": "Telangana",
+    "data_sources": "[\"https://epaper.ntnews.com/HyderabadMain?eid=1&edate=04/11/2026&pgid=534821&device=desktop&view=3\", \"https://mee24news.com/epaper/telangana/mahabub-nagar_old/kalwakurthy?\"]",
+    "top_demand_service": "Standby (Agent Idle)",
+    "featured_discount": "Standard Area Rate",
+    "is_national": 0,
+    "created_at": "2026-11-02 17:11:25",
+    "updated_at": "2026-11-04 14:41:07"
+  },
+  {
+    "id": 7,
+    "city_name": "Nalgonda",
+    "state": "Telangana",
+    "data_sources": "[\"https://www.suryaepaper.com/archive/date/04-Nov-2026?forcesingle=yes\", \"https://www.mee24news.com/epaper/telangana/nalgonda?\"]",
+    "top_demand_service": "Standby (Agent Idle)",
+    "featured_discount": "Standard Area Rate",
+    "is_national": 0,
+    "created_at": "2026-11-02 17:11:25",
+    "updated_at": "2026-11-04 14:41:07"
+  },
+  {
+    "id": 8,
+    "city_name": "Jadcherla",
+    "state": "Telangana",
+    "data_sources": "[\"https://epaper.ntnews.com/HyderabadMain?eid=1&edate=04/11/2026&pgid=534821&device=desktop&view=3\", \"https://www.mee24news.com/epaper/telangana/mahbubnagar/jadcherla-768?\"]",
+    "top_demand_service": "Standby (Agent Idle)",
+    "featured_discount": "Standard Area Rate",
+    "is_national": 0,
+    "created_at": "2026-11-02 17:11:25",
+    "updated_at": "2026-11-04 14:41:07"
+  },
+  {
+    "id": 9,
+    "city_name": "Nizamabad",
+    "state": "Telangana",
+    "data_sources": "[\"https://www.suryaepaper.com/category/38/nizamabad\", \"https://www.mee24news.com/epaper/telangana/nizamabad?\"]",
+    "top_demand_service": "Standby (Agent Idle)",
+    "featured_discount": "Standard Area Rate",
+    "is_national": 0,
+    "created_at": "2026-11-02 17:11:25",
+    "updated_at": "2026-11-04 14:41:07"
+  },
+  {
+    "id": 11,
+    "city_name": "Vijayawada",
+    "state": "Andhra Pradesh",
+    "data_sources": "[\"https://krishna.ap.gov.in/\", \"https://www.eenadu.net/andhra-pradesh/vijayawada\"]",
+    "top_demand_service": "Standby (Agent Idle)",
+    "featured_discount": "Standard Area Rate",
+    "is_national": 0,
+    "created_at": "2026-11-02 17:18:06",
+    "updated_at": "2026-11-02 17:18:26"
+  },
+  {
+    "id": 1,
+    "city_name": "All-India",
+    "state": "National Festivals & Holidays",
+    "data_sources": "[\"https://www.indiadigital.org/festivals/\", \"https://india.gov.in/calendar\"]",
+    "top_demand_service": "Diwali & National Gazetted Promos",
+    "featured_discount": "Up to 30% OFF",
+    "is_national": 1,
+    "created_at": "2026-11-02 17:11:24",
+    "updated_at": "2026-11-05 18:21:56"
+  }
+]

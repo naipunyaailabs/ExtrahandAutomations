@@ -3,6 +3,7 @@ import {
   AlertCircle,
   ArrowLeft,
   BarChart3,
+  Calendar,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -10,6 +11,8 @@ import {
   ChevronUp,
   Clock,
   Copy,
+  History,
+  Layers,
   MapPin,
   MessageSquare,
   CheckCheck,
@@ -27,9 +30,11 @@ import { AnimatePresence, motion } from "framer-motion";
 import { QRCodeSVG } from "qrcode.react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { api } from "../api";
+import { money, taskLink, useBranding } from "../branding";
 import { useToast, WhatsAppIcon } from "./ui";
 import { AnimatedNumber } from "./motion";
 import { WhatsAppAutomationFlow } from "./WhatsAppAutomationFlow";
+import { WhatsAppBulkMessaging } from "./WhatsAppBulkMessaging";
 import type {
   Ticket,
   WhatsAppStatus,
@@ -39,7 +44,7 @@ import type {
   EventItem,
 } from "../types";
 
-export type WhatsAppSection = "dispatch" | "dashboard" | "send" | "orders" | "replies" | "device";
+export type WhatsAppSection = "dispatch" | "dashboard" | "send" | "orders" | "replies" | "device" | "bulk";
 
 const AVATAR_COLORS = [
   "linear-gradient(135deg, #4f46e5, #3730a3)",
@@ -50,23 +55,7 @@ const AVATAR_COLORS = [
   "linear-gradient(135deg, #6366f1, #4338ca)",
 ];
 
-const HYDERABAD_SYNONYMS = [
-  "hyderabad", "secunderabad", "cyberabad", "tarur", "lb nagar", "gachibowli", "kukatpally",
-  "madhapur", "kondapur", "jubilee hills", "banjara hills", "begumpet", "ameerpet", "miyapur",
-  "hitec city", "uppal", "dilsukhnagar", "charminar", "lingampally", "chandanagar", "kothapet",
-  "malakpet", "nampally", "abids", "sainikpuri", "alwal", "malkajgiri", "tarnaka", "habsiguda",
-  "nacharam", "mallapur", "ecil", "kompally", "bowenpally", "marredpally", "attapur", "mehdipatnam",
-  "tolichowki", "manikonda", "narsingi", "kokapet", "tellapur", "gopanpally", "nallagandla",
-  "hafeezpet", "nizampet", "bachupally", "kphb", "moosapet", "erragadda", "sr nagar", "sanathnagar",
-  "balanagar", "jeedimetla", "quthbullapur", "chintal", "suchitra", "shamshabad", "rajendranagar",
-  "siddipet", "marpadga", "sangareddy", "medchal", "shadnagar"
-];
 
-const BANGALORE_SYNONYMS = [
-  "bangalore", "bengaluru", "indiranagar", "koramangala", "whitefield", "hsr layout",
-  "electronic city", "jayanagar", "jp nagar", "bellandur", "marathahalli", "hebbal",
-  "yelahanka", "banashankari", "malleshwaram", "rajajinagar", "btm layout", "sarjapur"
-];
 
 function getInitials(name: string): string {
   const parts = (name || "Helper").trim().split(/\s+/);
@@ -90,6 +79,7 @@ export function WhatsAppAgentView({
   onRefreshAll,
 }: WhatsAppAgentViewProps) {
   const toast = useToast();
+  const branding = useBranding();
   const [status, setStatus] = useState<WhatsAppStatus | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(false);
   const [showQrModal, setShowQrModal] = useState(false);
@@ -99,9 +89,14 @@ export function WhatsAppAgentView({
   const [qrMessage, setQrMessage] = useState<string | null>(null);
   const [loadingQr, setLoadingQr] = useState(false);
   const [pairMode, setPairMode] = useState<"qr" | "code">("qr");
-  const [pairingPhone, setPairingPhone] = useState("+91 98765 43210");
+  const [pairingPhone, setPairingPhone] = useState("");
   const [pairingCode, setPairingCode] = useState<string | null>(null);
   const [generatingCode, setGeneratingCode] = useState(false);
+
+  // WhatsApp Channel Controls: Automation & Bulk Messaging (Active / Inactive)
+  const [automationActive, setAutomationActive] = useState<boolean>(true);
+  const [bulkActive, setBulkActive] = useState<boolean>(true);
+  const [isTogglingChannel, setIsTogglingChannel] = useState<string | null>(null);
 
   // Active / Available Tasks
   const availableTickets = tickets.length > 0 ? tickets : [];
@@ -139,7 +134,9 @@ export function WhatsAppAgentView({
     const now = new Date();
     const dDay = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
     const nowDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    const diffDays = Math.round((dDay - nowDay) / (1000 * 60 * 60 * 24));
+    // The backend decides "today" (booked today or scheduled for today, India time) - same as the dashboards
+    const diffDays =
+      typeof t.days_from_today === "number" ? t.days_from_today : Math.round((dDay - nowDay) / (1000 * 60 * 60 * 24));
 
     if (diffDays === 0) {
       return {
@@ -230,100 +227,8 @@ export function WhatsAppAgentView({
   const [deliveredPhones, setDeliveredPhones] = useState<Set<string>>(new Set());
 
   // Dynamic candidate computation strictly matching task's city and service taxonomy
-  const computedCandidates = useMemo<TaskLocationCandidateHelper[]>(() => {
-    if (!selectedTicket) return [];
-    const tCity = (selectedTicket.city || "").toLowerCase().trim();
-    const tAddr = (selectedTicket.address || "").toLowerCase().trim();
-    const tLoc = `${tCity} ${tAddr}`.toLowerCase();
-    const tCat = (selectedTicket.category || "").toLowerCase().trim();
-    const tTitle = (selectedTicket.title || "").toLowerCase().trim();
-    const tDesc = (selectedTicket.description || "").toLowerCase().trim();
-    const tText = `${tCat} ${tTitle} ${tDesc}`;
-
-    const isHydTask = HYDERABAD_SYNONYMS.some(s => tLoc.includes(s)) || tLoc.includes("hyderabad");
-    const isBlrTask = BANGALORE_SYNONYMS.some(s => tLoc.includes(s)) || tLoc.includes("bangalore") || tLoc.includes("bengaluru");
-
-    // Service trade cluster matching dictionary
-    const SERVICE_CLUSTERS: Record<string, string[]> = {
-      electrician: ["electric", "electrician", "electrical", "wiring", "switch", "socket", "fan", "light", "mcb", "fuse", "inverter", "switchboard", "geyser repair"],
-      plumbing: ["plumb", "plumber", "plumbing", "pipe", "leak", "tap", "faucet", "toilet", "flush", "basin", "drain", "water_tank", "tank", "sanitary"],
-      cleaning: ["clean", "cleaning", "deep clean", "housekeeping", "house keeping", "dusting", "mop", "sofa", "carpet", "sanitiz", "wash", "bathroom cleaning", "maid"],
-      ac_repair: ["ac", "air conditioner", "ac repair", "ac installation", "gas refill", "cooling", "ac service", "hvac", "compressor"],
-      carpentry: ["carpenter", "carpentry", "wood", "woodwork", "furniture", "assembly", "shelf", "wardrobe", "bed", "door", "window", "lock"],
-      painting: ["paint", "painting", "painter", "whitewash", "wall", "texture"],
-      pest_control: ["pest", "pest_control", "termite", "cockroach", "mosquito", "rodent", "bedbug", "fumigation"],
-      moving: ["pack", "packer", "packers", "mover", "moving", "shifting", "relocation", "loading", "unloading", "transport", "delivery", "logistics"],
-      gardening: ["garden", "gardening", "lawn", "plant", "tree", "weeding", "mowing", "landscaping"],
-      cooking: ["cook", "cooking", "chef", "meal", "catering"],
-      driver: ["driver", "driving", "chauffeur", "cab"],
-      appliance: ["appliance", "refrigerator", "fridge", "washing machine", "microwave", "oven", "tv repair", "water purifier", "ro repair"],
-    };
-
-    const GENERIC_TAGS = new Set(["other", "general", "none", "service", "task", "all", "works", "helper", ""]);
-
-    const matchedFromHelpers = helpers.filter((h) => {
-      // Must have valid phone number
-      const cleanPhone = (h.phone || "").replace(/[^0-9]/g, "");
-      if (!cleanPhone || cleanPhone.length < 10) return false;
-
-      const hCity = (h.city || "").toLowerCase().trim();
-      const hAddr = (h.address || "").toLowerCase().trim();
-      const hAreas = (h.work_areas || []).map(a => a.toLowerCase()).join(" ");
-      const hLoc = `${hCity} ${hAddr} ${hAreas}`;
-
-      // 1. Strict Location Matching
-      let locMatch = false;
-      if (isHydTask) {
-        locMatch = HYDERABAD_SYNONYMS.some(s => hLoc.includes(s)) || hLoc.includes("hyderabad");
-      } else if (isBlrTask) {
-        locMatch = BANGALORE_SYNONYMS.some(s => hLoc.includes(s)) || hLoc.includes("bangalore") || hLoc.includes("bengaluru");
-      } else if (tCity && hCity) {
-        locMatch = hLoc.includes(tCity) || tCity.includes(hCity);
-      } else if (tAddr && hAddr) {
-        locMatch = hLoc.includes(tAddr) || tLoc.includes(hAddr);
-      }
-      if (!locMatch) return false;
-
-      // 2. Strict Service & Trade Cluster Matching
-      const rawSkills = (h.skills || []).concat(h.categories || []);
-      const hSkills = rawSkills
-        .map(s => String(s).toLowerCase().trim())
-        .filter(s => s && !GENERIC_TAGS.has(s));
-
-      if (hSkills.length === 0) return false; // Helper with no skills is NOT eligible
-
-      // Check if ticket text matches any trade cluster
-      for (const [, keywords] of Object.entries(SERVICE_CLUSTERS)) {
-        const ticketHasCluster = keywords.some(kw => tText.includes(kw));
-        if (ticketHasCluster) {
-          const helperHasCluster = hSkills.some(tag => keywords.some(kw => tag.includes(kw) || kw.includes(tag)));
-          if (helperHasCluster) return true;
-        }
-      }
-
-      // Exact category / skill match fallback (excluding generic tags)
-      if (tCat && !GENERIC_TAGS.has(tCat)) {
-        return hSkills.some(s => s.includes(tCat) || tCat.includes(s));
-      }
-
-      return false;
-    }).map((h, i) => ({
-      helper_id: h.id,
-      profile_id: h.profile_id,
-      name: h.name || `Partner #${h.id.slice(0, 6)}`,
-      phone: h.phone || "+91 98765 00000",
-      skills: h.skills || [],
-      categories: h.categories || [],
-      city: h.city || selectedTicket.city || "Bengaluru",
-      distance_km: Number((1.8 + (i % 6) * 1.2).toFixed(1)),
-      is_verified: true,
-    }));
-
-    return matchedFromHelpers;
-  }, [helpers, selectedTicket]);
-
   const activeCandidates = useMemo<TaskLocationCandidateHelper[]>(() => {
-    const list = locationCandidates && locationCandidates.length > 0 ? locationCandidates : computedCandidates;
+    const list = locationCandidates ?? [];
     // If ticket has an assignee, ensure they are in the list with In Progress status
     if (selectedTicket?.assignee && selectedTicket.assignee.name) {
       const exists = list.some(
@@ -335,18 +240,17 @@ export function WhatsAppAgentView({
           {
             helper_id: selectedTicket.assignee.id || "assigned-active",
             name: selectedTicket.assignee.name,
-            phone: selectedTicket.assignee.phone || "+91 98765 00099",
-            skills: [selectedTicket.category || "Service"],
-            city: selectedTicket.city || "Hyderabad",
-            distance_km: 1.8,
-            is_verified: true,
+            phone: selectedTicket.assignee.phone || "",
+            skills: selectedTicket.category ? [selectedTicket.category] : [],
+            city: selectedTicket.city || null,
+            distance_km: null,
           },
           ...list,
         ];
       }
     }
     return list;
-  }, [locationCandidates, computedCandidates, selectedTicket]);
+  }, [locationCandidates, selectedTicket]);
 
   const getHelperDeliveryStatus = (h: TaskLocationCandidateHelper): "delivered" | "in_progress" | "pending" => {
     const isAssigned =
@@ -390,15 +294,19 @@ export function WhatsAppAgentView({
     };
   }, [selectedTicketId]);
 
-  const appTaskUrl = selectedTicket
-    ? `${window.location.origin}/tickets/${encodeURIComponent(selectedTicket.id)}`
-    : `${window.location.origin}/tickets/demo`;
+  const appTaskUrl = selectedTicket ? taskLink(branding, selectedTicket.id) : "";
 
   const fetchStatus = async () => {
     setLoadingStatus(true);
     try {
       const res = await api.whatsapp.status();
       setStatus(res);
+      if (typeof res.automation_active === "boolean") {
+        setAutomationActive(res.automation_active);
+      }
+      if (typeof res.bulk_active === "boolean") {
+        setBulkActive(res.bulk_active);
+      }
     } catch (e: unknown) {
       console.warn("Could not fetch WhatsApp status:", e);
     } finally {
@@ -408,9 +316,64 @@ export function WhatsAppAgentView({
 
   useEffect(() => {
     fetchStatus();
+    // Also load initial channel control settings
+    api.whatsapp
+      .channelControls()
+      .then((controls) => {
+        if (typeof controls.automation_active === "boolean") setAutomationActive(controls.automation_active);
+        if (typeof controls.bulk_active === "boolean") setBulkActive(controls.bulk_active);
+      })
+      .catch(() => {});
+
     const interval = setInterval(fetchStatus, 10000);
     return () => clearInterval(interval);
   }, []);
+
+  const handleToggleAutomation = async () => {
+    const nextVal = !automationActive;
+    setAutomationActive(nextVal);
+    setIsTogglingChannel("automation");
+    try {
+      const res = await api.whatsapp.toggleChannel({ automation_active: nextVal });
+      if (typeof res.automation_active === "boolean") {
+        setAutomationActive(res.automation_active);
+      }
+      toast.success(
+        nextVal ? "WhatsApp Automation: ACTIVE" : "WhatsApp Automation: INACTIVE",
+        nextVal
+          ? "Automated task dispatches & work orders can now send messages."
+          : "Automation messaging is paused and cannot send messages."
+      );
+    } catch (err) {
+      setAutomationActive(!nextVal);
+      toast.error("Toggle Failed", "Could not toggle WhatsApp Automation channel.");
+    } finally {
+      setIsTogglingChannel(null);
+    }
+  };
+
+  const handleToggleBulk = async () => {
+    const nextVal = !bulkActive;
+    setBulkActive(nextVal);
+    setIsTogglingChannel("bulk");
+    try {
+      const res = await api.whatsapp.toggleChannel({ bulk_active: nextVal });
+      if (typeof res.bulk_active === "boolean") {
+        setBulkActive(res.bulk_active);
+      }
+      toast.success(
+        nextVal ? "WhatsApp Bulk Messaging: ACTIVE" : "WhatsApp Bulk Messaging: INACTIVE",
+        nextVal
+          ? "Bulk messages and broadcasts can now be sent."
+          : "Bulk messaging is paused and cannot send messages."
+      );
+    } catch (err) {
+      setBulkActive(!nextVal);
+      toast.error("Toggle Failed", "Could not toggle WhatsApp Bulk channel.");
+    } finally {
+      setIsTogglingChannel(null);
+    }
+  };
 
   /** `quiet` refreshes in the background (polling) without flashing the loading state. */
   const fetchQrCode = async (quiet = false) => {
@@ -448,6 +411,13 @@ export function WhatsAppAgentView({
   };
 
   const handleBroadcastToLocationHelpers = async () => {
+    if (!automationActive) {
+      toast.error(
+        "Automation Inactive",
+        "WhatsApp Automation is currently turned OFF. Toggle Automation to Active at the top to broadcast work orders."
+      );
+      return;
+    }
     if (!selectedTicket) {
       toast.error("No task selected", "Please select a task to broadcast.");
       return;
@@ -491,7 +461,7 @@ export function WhatsAppAgentView({
       setDeliveredPhones(newDelivered);
       toast.info(
         "WhatsApp Broadcast Dispatched",
-        `Dispatched task alert to ${activeCandidates.length} matching helpers in ${selectedTicket.city || "Hyderabad"}.`
+        `Dispatched task alert to ${activeCandidates.length} matching helpers in ${selectedTicket.city || "the task area"}.`
       );
     } finally {
       setBroadcasting(false);
@@ -508,7 +478,7 @@ export function WhatsAppAgentView({
       </div>
       <div className="agent-pill" title="Admin WhatsApp Dispatch Line">
         <Smartphone size={14} style={{ color: "#10b981" }} />
-        <span>Admin: <b className="mono">{status?.phone_number || "+91 98765 43210"}</b></span>
+        <span>Admin: <b className="mono">{status?.phone_number || "—"}</b></span>
       </div>
     </div>
   );
@@ -538,23 +508,23 @@ export function WhatsAppAgentView({
       <div className="whatsapp-bubble-real">
         <div className="whatsapp-bubble-title">
           <span>🔔</span>
-          <span>*New Task Alert — ExtraHand*</span>
+          <span>*New Task Alert — {branding.company_name}*</span>
         </div>
         <div className="whatsapp-bubble-body">
           <div>
             Hi <b>&#123;helper_name&#125;</b>! A new work order matches your verified skills:
           </div>
           <div style={{ marginTop: "4px" }}>
-            📋 <b>Task:</b> {selectedTicket?.title || "Daily cook for family of 4"}
+            📋 <b>Task:</b> {selectedTicket?.title || "{task}"}
           </div>
           <div>
-            📍 <b>Location:</b> {selectedTicket?.city || selectedTicket?.address || "Bengaluru"}
+            📍 <b>Location:</b> {selectedTicket?.city || selectedTicket?.address || "{location}"}
           </div>
           <div>
-            ⏰ <b>Schedule:</b> {selectedDateInfo?.label || "Today (05:27 pm)"}
+            ⏰ <b>Schedule:</b> {selectedDateInfo?.label || "{schedule}"}
           </div>
           <div>
-            💰 <b>Payout:</b> ₹{selectedTicket?.budget || 1200} guaranteed
+            💰 <b>Payout:</b> {selectedTicket?.budget != null ? money(selectedTicket.budget, branding) : "To be confirmed"}
           </div>
         </div>
         <div className="whatsapp-bubble-link-chip">
@@ -576,9 +546,9 @@ export function WhatsAppAgentView({
   const isDashboard = section === "dashboard" || section === "orders";
   const isSend = section === "send" || section === "replies";
 
-  const messagesTodayCount = status?.messages_today ?? 18;
-  const totalMessagesSentCount = status?.messages_total ?? 142;
-  const deliveryRate = status?.delivery_rate ?? "99.8%";
+  const messagesTodayCount = status?.messages_today ?? 0;
+  const totalMessagesSentCount = status?.messages_total ?? 0;
+  const deliveryRate = status?.delivery_rate ?? "—";
 
   return (
     <div className="agent-features-container whatsapp-theme">
@@ -592,6 +562,9 @@ export function WhatsAppAgentView({
             tickets={tickets}
             helpers={helpers}
             status={status}
+            automationActive={automationActive}
+            onToggleAutomation={handleToggleAutomation}
+            isTogglingChannel={isTogglingChannel}
             onRefresh={onRefreshAll}
           />
         </div>
@@ -814,80 +787,146 @@ export function WhatsAppAgentView({
               {subView === "list" ? (
                 <div className="wa-tasks-master-view">
                   {/* Search & Date Filter Bar */}
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", flexWrap: "wrap", marginBottom: "1.25rem" }}>
-                  <div style={{ position: "relative", flex: 1, minWidth: "260px" }}>
-                    <Search size={15} style={{ position: "absolute", left: "12px", top: "50%", transform: "translateY(-50%)", color: "var(--muted)" }} />
+                  {/* 4 Interactive Big KPI Cards for Date Category Filtering */}
+                  <div className="task-kpi-grid">
+                    {/* Card 1: All Tasks */}
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setDateFilter("all")}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setDateFilter("all"); }}
+                      className={`task-kpi-card ${dateFilter === "all" ? "task-kpi-active" : ""}`}
+                      title="Filter by all tasks"
+                    >
+                      <div className="task-kpi-top">
+                        <div className="task-kpi-icon-wrap" style={{ background: "rgba(37, 99, 235, 0.12)", color: "#2563eb" }}>
+                          <Layers size={16} />
+                        </div>
+                        <span className="task-kpi-badge" style={{ background: "rgba(37, 99, 235, 0.1)", color: "#1d4ed8" }}>
+                          {dateFilter === "all" ? "Selected" : "All"}
+                        </span>
+                      </div>
+                      <div className="task-kpi-middle">
+                        <span className="task-kpi-label">All Tasks</span>
+                        <span className="task-kpi-value" style={{ color: "var(--brand, #2563eb)" }}>
+                          <AnimatedNumber value={availableTickets.length} />
+                        </span>
+                      </div>
+                      <div className="task-kpi-footer">
+                        <span className="task-kpi-meta">Total operational tickets</span>
+                        {dateFilter === "all" && (
+                          <span className="task-kpi-indicator" style={{ color: "#2563eb" }}>● Active</span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Card 2: Current Tasks (Today) */}
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setDateFilter("today")}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setDateFilter("today"); }}
+                      className={`task-kpi-card ${dateFilter === "today" ? "task-kpi-active active-today" : ""}`}
+                      title="Filter by tasks due today"
+                    >
+                      <div className="task-kpi-top">
+                        <div className="task-kpi-icon-wrap" style={{ background: "rgba(5, 150, 105, 0.12)", color: "#059669" }}>
+                          <Clock size={16} />
+                        </div>
+                        <span className="task-kpi-badge" style={{ background: "rgba(5, 150, 105, 0.12)", color: "#047857", display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                          <span className="dot pulse success" style={{ width: 5, height: 5 }} />
+                          Today
+                        </span>
+                      </div>
+                      <div className="task-kpi-middle">
+                        <span className="task-kpi-label">Current</span>
+                        <span className="task-kpi-value" style={{ color: "#059669" }}>
+                          <AnimatedNumber value={todayCount} />
+                        </span>
+                      </div>
+                      <div className="task-kpi-footer">
+                        <span className="task-kpi-meta">Due today · urgent priority</span>
+                        {dateFilter === "today" && (
+                          <span className="task-kpi-indicator" style={{ color: "#059669" }}>● Active</span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Card 3: Upcoming Tasks */}
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setDateFilter("upcoming")}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setDateFilter("upcoming"); }}
+                      className={`task-kpi-card ${dateFilter === "upcoming" ? "task-kpi-active active-upcoming" : ""}`}
+                      title="Filter by upcoming scheduled tasks"
+                    >
+                      <div className="task-kpi-top">
+                        <div className="task-kpi-icon-wrap" style={{ background: "rgba(234, 88, 12, 0.12)", color: "#ea580c" }}>
+                          <Calendar size={16} />
+                        </div>
+                        <span className="task-kpi-badge" style={{ background: "rgba(234, 88, 12, 0.12)", color: "#c2410c" }}>
+                          Future
+                        </span>
+                      </div>
+                      <div className="task-kpi-middle">
+                        <span className="task-kpi-label">Upcoming</span>
+                        <span className="task-kpi-value" style={{ color: "#ea580c" }}>
+                          <AnimatedNumber value={upcomingCount} />
+                        </span>
+                      </div>
+                      <div className="task-kpi-footer">
+                        <span className="task-kpi-meta">Scheduled for later dates</span>
+                        {dateFilter === "upcoming" && (
+                          <span className="task-kpi-indicator" style={{ color: "#ea580c" }}>● Active</span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Card 4: Previous Tasks */}
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setDateFilter("past")}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setDateFilter("past"); }}
+                      className={`task-kpi-card ${dateFilter === "past" ? "task-kpi-active active-past" : ""}`}
+                      title="Filter by past/completed tasks"
+                    >
+                      <div className="task-kpi-top">
+                        <div className="task-kpi-icon-wrap" style={{ background: "rgba(202, 138, 4, 0.12)", color: "#ca8a04" }}>
+                          <History size={16} />
+                        </div>
+                        <span className="task-kpi-badge" style={{ background: "rgba(202, 138, 4, 0.12)", color: "#a16207" }}>
+                          History
+                        </span>
+                      </div>
+                      <div className="task-kpi-middle">
+                        <span className="task-kpi-label">Previous</span>
+                        <span className="task-kpi-value" style={{ color: "#ca8a04" }}>
+                          <AnimatedNumber value={pastCount} />
+                        </span>
+                      </div>
+                      <div className="task-kpi-footer">
+                        <span className="task-kpi-meta">Past &amp; completed work</span>
+                        {dateFilter === "past" && (
+                          <span className="task-kpi-indicator" style={{ color: "#ca8a04" }}>● Active</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Search bar below KPI grid */}
+                  <div style={{ position: "relative", marginBottom: "1.25rem" }}>
+                    <Search size={15} style={{ position: "absolute", left: "14px", top: "50%", transform: "translateY(-50%)", color: "var(--muted)" }} />
                     <input
                       type="text"
                       className="input"
                       value={taskListSearch}
                       onChange={(e) => setTaskListSearch(e.target.value)}
                       placeholder="Search tasks by title, customer, category, or city..."
-                      style={{ paddingLeft: "34px", borderRadius: "8px", width: "100%" }}
+                      style={{ paddingLeft: "38px", borderRadius: "8px", width: "100%", padding: "10px 14px 10px 38px", fontSize: "14px" }}
                     />
                   </div>
-
-                  {/* Date Filter Tabs - Clean, No emoji balls */}
-                  <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
-                    <button
-                      type="button"
-                      className={`btn btn-sm ${dateFilter === "all" ? "btn-primary" : "btn-secondary"}`}
-                      style={{ fontSize: "12px", padding: "6px 14px", borderRadius: "8px", fontWeight: 600 }}
-                      onClick={() => setDateFilter("all")}
-                    >
-                      All Tasks ({availableTickets.length})
-                    </button>
-                    <button
-                      type="button"
-                      className={`btn btn-sm ${dateFilter === "today" ? "btn-primary" : "btn-secondary"}`}
-                      style={{
-                        fontSize: "12px",
-                        padding: "6px 14px",
-                        borderRadius: "8px",
-                        fontWeight: 600,
-                        background: dateFilter === "today" ? "linear-gradient(135deg, #059669 0%, #047857 100%)" : undefined,
-                        borderColor: dateFilter === "today" ? "#047857" : undefined,
-                        color: dateFilter === "today" ? "#fff" : undefined,
-                        boxShadow: dateFilter === "today" ? "0 2px 6px rgba(5, 150, 105, 0.25)" : undefined,
-                      }}
-                      onClick={() => setDateFilter("today")}
-                    >
-                      Current ({todayCount})
-                    </button>
-                    <button
-                      type="button"
-                      className={`btn btn-sm ${dateFilter === "upcoming" ? "btn-primary" : "btn-secondary"}`}
-                      style={{
-                        fontSize: "12px",
-                        padding: "6px 14px",
-                        borderRadius: "8px",
-                        fontWeight: 600,
-                        background: dateFilter === "upcoming" ? "#3b82f6" : undefined,
-                        borderColor: dateFilter === "upcoming" ? "#3b82f6" : undefined,
-                        color: dateFilter === "upcoming" ? "#fff" : undefined,
-                      }}
-                      onClick={() => setDateFilter("upcoming")}
-                    >
-                      Upcoming ({upcomingCount})
-                    </button>
-                    <button
-                      type="button"
-                      className={`btn btn-sm ${dateFilter === "past" ? "btn-primary" : "btn-secondary"}`}
-                      style={{
-                        fontSize: "12px",
-                        padding: "6px 14px",
-                        borderRadius: "8px",
-                        fontWeight: 600,
-                        background: dateFilter === "past" ? "#ca8a04" : undefined,
-                        borderColor: dateFilter === "past" ? "#ca8a04" : undefined,
-                        color: dateFilter === "past" ? "#fff" : undefined,
-                      }}
-                      onClick={() => setDateFilter("past")}
-                    >
-                      Previous ({pastCount})
-                    </button>
-                  </div>
-                </div>
 
                 {/* Tasks List - Segregated by Today (Current), Upcoming, and Previous */}
                 <div className="wa-tasks-list-container">
@@ -981,7 +1020,7 @@ export function WhatsAppAgentView({
 
                                 {/* Payout */}
                                 <div style={{ fontWeight: 700, color: "#047857", fontSize: "13px" }}>
-                                  ₹{t.budget || 500}
+                                  {money(t.budget, branding)}
                                 </div>
                               </div>
 
@@ -1172,7 +1211,7 @@ export function WhatsAppAgentView({
                               <span>Customer Location</span>
                             </span>
                             <span className="val" style={{ color: "#047857" }}>
-                              {selectedTicket.city || selectedTicket.address || "Bengaluru"}
+                              {selectedTicket.city || selectedTicket.address || "—"}
                             </span>
                             <span className="sub-hint">Matched within 10 km</span>
                           </div>
@@ -1191,7 +1230,7 @@ export function WhatsAppAgentView({
                               <span>Helper Payout</span>
                             </span>
                             <span className="val emerald">
-                              ₹{selectedTicket.budget || 1200}
+                              {money(selectedTicket.budget, branding)}
                             </span>
                             <span className="sub-hint">Instant partner payout</span>
                           </div>
@@ -1221,12 +1260,12 @@ export function WhatsAppAgentView({
                             </div>
                           </div>
                           <a
-                            href={`tel:${selectedTicket.customer?.phone || "+919876500004"}`}
+                            href={selectedTicket.customer?.phone ? `tel:${selectedTicket.customer.phone}` : undefined}
                             className="wa-customer-phone"
                             title="Call customer directly"
                           >
                             <span>📞</span>
-                            <span>{selectedTicket.customer?.phone || "+91 98765 00004"}</span>
+                            <span>{selectedTicket.customer?.phone || "No phone on file"}</span>
                           </a>
                         </div>
 
@@ -1293,13 +1332,67 @@ export function WhatsAppAgentView({
                           </AnimatePresence>
                         </div>
 
+                        {/* Warning banner if WhatsApp Automation is Inactive */}
+                        {!automationActive && (
+                          <div
+                            style={{
+                              marginBottom: "0.85rem",
+                              padding: "9px 14px",
+                              borderRadius: "8px",
+                              background: "rgba(239, 68, 68, 0.08)",
+                              border: "1.5px solid rgba(239, 68, 68, 0.35)",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "space-between",
+                              flexWrap: "wrap",
+                              gap: "8px",
+                              fontSize: "12.5px",
+                              color: "#991b1b",
+                            }}
+                          >
+                            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                              <AlertCircle size={16} style={{ color: "#ef4444", flexShrink: 0 }} />
+                              <span>
+                                <strong>WhatsApp Automation is INACTIVE:</strong> Work order broadcasts are blocked. Toggle <strong>Automation: Inactive</strong> at top to enable. (Bulk messaging can still send if Active).
+                                <strong>WhatsApp Automation is DEACTIVATED:</strong> Work order broadcasts are blocked. Click the red <strong>Deactivated</strong> button at top right to activate.
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              className="btn btn-sm"
+                              onClick={handleToggleAutomation}
+                              style={{
+                                fontSize: "11px",
+                                padding: "2px 8px",
+                                background: "#ef4444",
+                                color: "#fff",
+                                border: "none",
+                                borderRadius: "6px",
+                                fontWeight: 700,
+                                cursor: "pointer",
+                              }}
+                            >
+                              Activate Automation
+                            </button>
+                          </div>
+                        )}
+
                         {/* Primary Broadcast Action Button */}
                         <motion.button
-                          whileHover={{ scale: 1.01 }}
-                          whileTap={{ scale: 0.98 }}
+                          whileHover={automationActive ? { scale: 1.01 } : {}}
+                          whileTap={automationActive ? { scale: 0.98 } : {}}
                           className="wa-broadcast-submit-btn"
                           onClick={handleBroadcastToLocationHelpers}
-                          disabled={broadcasting}
+                          disabled={broadcasting || !automationActive}
+                          style={
+                            !automationActive
+                              ? {
+                                  background: "#f87171",
+                                  borderColor: "#f87171",
+                                  cursor: "not-allowed",
+                                }
+                              : undefined
+                          }
                         >
                           {broadcasting ? (
                             <RefreshCw size={16} className="spin" />
@@ -1307,7 +1400,9 @@ export function WhatsAppAgentView({
                             <WhatsAppIcon size={17} />
                           )}
                           <span>
-                            {broadcasting
+                            {!automationActive
+                              ? `🚫 Cannot Send: Automation is Deactivated (Click Active button at top right)`
+                              : broadcasting
                               ? "Broadcasting via WhatsApp..."
                               : `Broadcast via WhatsApp to All (${activeCandidates.length}) Matched Helpers`}
                           </span>
@@ -1639,6 +1734,19 @@ export function WhatsAppAgentView({
         </>
       )}
 
+      {/* =========================================================================
+          VIEW 4: BULK MESSAGING MODULE (Recipients, Templates, Dynamic Tags, Dispatch)
+          ========================================================================= */}
+      {section === "bulk" && (
+        <WhatsAppBulkMessaging
+          status={status}
+          onRefreshStatus={fetchStatus}
+          bulkActive={bulkActive}
+          onToggleBulk={handleToggleBulk}
+          isTogglingChannel={isTogglingChannel}
+        />
+      )}
+
       {/* Connection & QR Code Modal */}
       {showQrModal && (
         <div className="modal-backdrop" onClick={() => setShowQrModal(false)}>
@@ -1691,26 +1799,6 @@ export function WhatsAppAgentView({
                             <button type="button" className="btn btn-secondary btn-sm" onClick={() => fetchQrCode()}>
                               <RefreshCw size={13} />
                               <span>Try again</span>
-                            </button>
-                            <button
-                              type="button"
-                              className="btn btn-outline-success btn-sm"
-                              onClick={() => {
-                                setStatus({
-                                  session_id: "extrahand-dispatch",
-                                  status: "WORKING",
-                                  phone_number: pairingPhone || "+91 98765 43210",
-                                  engine: "openwa-simulated",
-                                  qr_code_available: false,
-                                  uptime_seconds: 3600,
-                                });
-                                setQrError(null);
-                                setShowQrModal(false);
-                                toast.success("Connected in Demo Mode", "Admin WhatsApp session active.");
-                              }}
-                            >
-                              <CheckCircle2 size={13} />
-                              <span>Quick Link (Demo)</span>
                             </button>
                           </div>
                         </div>
@@ -1785,7 +1873,7 @@ export function WhatsAppAgentView({
                         className="text-input"
                         value={pairingPhone}
                         onChange={(e) => setPairingPhone(e.target.value)}
-                        placeholder="+91 98765 43210"
+                        placeholder={`${branding.default_country_code} phone number`}
                         style={{ flex: 1, padding: "8px 12px", borderRadius: "8px" }}
                       />
                       <button
@@ -1864,16 +1952,20 @@ export function WhatsAppAgentView({
                   type="button"
                   className="btn btn-outline-success btn-sm"
                   onClick={() => {
+                    if (!pairingPhone.trim()) {
+                      toast.error("Phone Required", "Enter the admin WhatsApp number first.");
+                      return;
+                    }
                     setStatus({
-                      session_id: "extrahand-dispatch",
+                      session_id: status?.session_id ?? "",
                       status: "WORKING",
-                      phone_number: pairingPhone || "+91 98765 43210",
-                      engine: "openwa-live",
+                      phone_number: pairingPhone,
+                      engine: "openwa-simulated",
                       qr_code_available: false,
-                      uptime_seconds: 3600,
+                      uptime_seconds: 0,
                     });
                     setShowQrModal(false);
-                    toast.success("WhatsApp Connected", `Admin number ${pairingPhone || "+91 98765 43210"} linked successfully.`);
+                    toast.success("Simulator Connected", `Simulated session for ${pairingPhone}.`);
                   }}
                 >
                   <CheckCircle2 size={13} />

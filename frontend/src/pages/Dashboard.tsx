@@ -28,10 +28,9 @@ import { Timeline } from "../components/Timeline";
 import { Card, Empty, SkeletonRows, WhatsAppIcon } from "../components/ui";
 import { WhatsAppAgentView } from "../components/WhatsAppAgentView";
 import { AdvertisementView } from "../components/AdvertisementView";
-import { FloatingAIAgent } from "../components/FloatingAIAgent";
 import { CustomerFeedbackPage } from "./CustomerFeedback";
 import { ReportsPage } from "./Reports";
-import { fmtRelative, fmtTime } from "../format";
+import { fmtMoney, fmtRelative, fmtTime } from "../format";
 import { usePoll } from "../hooks";
 
 type ActiveModule = "none" | "calling" | "whatsapp" | "advertisement" | "tickets" | "system" | "feedback" | "reports";
@@ -46,6 +45,7 @@ export default function Dashboard() {
   const tickets = usePoll(() => api.tickets(), 5000);
   const events = usePoll(() => api.events(25), 3000);
   const waStatus = usePoll(api.whatsapp.status, 6000);
+  const adCities = usePoll(api.advestiment.cities, 60000);
 
   const s = stats.data;
   const by = s?.tickets_by_status ?? {};
@@ -61,6 +61,14 @@ export default function Dashboard() {
   const unassignedCount = s?.unassigned_tickets ?? by.new ?? 0;
   const assignedCount = s?.assigned_tickets ?? by.assigned ?? 0;
   const completedCount = s?.completed_tickets ?? (tickets.data ?? []).filter((t) => t.status === "completed").length;
+
+  // Advertisement card: computed from the marketing calendar
+  const adCityList = adCities.data ?? [];
+  const adRegional = adCityList.filter((c) => !c.is_national);
+  const adStates = adRegional.filter((c) => c.region_type === "state" || c.region_type === "union_territory");
+  const adCityRegions = adRegional.filter((c) => c.region_type === "city");
+  const adEvents = adCityList.flatMap((c) => c.events ?? []);
+  const adMaxDiscount = adEvents.reduce((m, e) => Math.max(m, e.suggested_discount || 0), 0);
 
   // Reminders queue
   const reminders = (tickets.data ?? [])
@@ -177,11 +185,11 @@ export default function Dashboard() {
                     <span className="hero-metric-sub">Awaiting dispatch</span>
                   </div>
                   <div className="hero-metric-box">
-                    <span className="hero-metric-label">Delivery Rate</span>
+                    <span className="hero-metric-label">Messages Today</span>
                     <span className="hero-metric-val val-whatsapp" style={{ color: "#16a34a" }}>
-                      99.8%
+                      <AnimatedNumber value={waStatus.data?.messages_today ?? 0} />
                     </span>
-                    <span className="hero-metric-sub">OpenWA verified</span>
+                    <span className="hero-metric-sub">{waStatus.data?.status ?? "Status unknown"}</span>
                   </div>
                 </div>
               </div>
@@ -210,34 +218,36 @@ export default function Dashboard() {
                   </div>
                   <span className="status-pill pill-yellow">
                     <Sparkles size={12} />
-                    <span>AI Event Radar</span>
+                    <span>Festival Calendar</span>
                   </span>
                 </div>
 
                 <div className="kpi-hero-info">
                   <h3 className="kpi-hero-title">Advertisement &amp; Campaigns</h3>
-                  <div className="kpi-hero-sub">🎉 City Event Calendars &amp; Discounts</div>
+                  <div className="kpi-hero-sub">🎉 State &amp; City Event Calendars &amp; Discounts</div>
                 </div>
 
                 <div className="kpi-hero-metrics">
                   <div className="hero-metric-box">
-                    <span className="hero-metric-label">Monitored Hubs</span>
+                    <span className="hero-metric-label">Monitored Regions</span>
                     <span className="hero-metric-val val-advertisement">
-                      8 Cities
+                      {adCityRegions.length} Cities
                     </span>
-                    <span className="hero-metric-sub">Siddipet, Warangal, MBN...</span>
+                    <span className="hero-metric-sub">
+                      {adStates.map((c) => c.city_name).join(", ") || "No states"} + All-India
+                    </span>
                   </div>
                   <div className="hero-metric-box">
-                    <span className="hero-metric-label">Detected Events</span>
+                    <span className="hero-metric-label">Registered Festivals</span>
                     <span className="hero-metric-val val-advertisement">
-                      16 Events
+                      {adEvents.length} Events
                     </span>
-                    <span className="hero-metric-sub">Festivals &amp; Sports</span>
+                    <span className="hero-metric-sub">Upcoming in calendar</span>
                   </div>
                   <div className="hero-metric-box">
                     <span className="hero-metric-label">Promo Discounts</span>
                     <span className="hero-metric-val val-advertisement">
-                      Up to 30%
+                      {adMaxDiscount > 0 ? `Up to ${adMaxDiscount}%` : "—"}
                     </span>
                     <span className="hero-metric-sub">Dynamic coupons</span>
                   </div>
@@ -245,7 +255,7 @@ export default function Dashboard() {
               </div>
 
               <div className="kpi-hero-action">
-                <span>Manage City Event Ads &amp; Calendars</span>
+                <span>Register Festivals &amp; Posters</span>
                 <ChevronRight size={16} className="arrow-icon" />
               </div>
             </motion.div>
@@ -256,7 +266,7 @@ export default function Dashboard() {
               whileHover={{ y: -6, scale: 1.015 }}
               whileTap={{ scale: 0.98 }}
               transition={{ type: "spring", stiffness: 350, damping: 22 }}
-              onClick={() => navigate("/engagement")}
+              onClick={() => navigate("/engagement/dashboard")}
               role="button"
               tabIndex={0}
               aria-label="Open User Engagement & Operational Performance Dashboard"
@@ -288,14 +298,14 @@ export default function Dashboard() {
                   <div className="hero-metric-box">
                     <span className="hero-metric-label">Acceptance Rate</span>
                     <span className="hero-metric-val val-reports" style={{ color: "#10b981" }}>
-                      {s?.acceptance_rate_24h ? `${s.acceptance_rate_24h}%` : "94.2%"}
+                      {s?.acceptance_rate_24h != null ? `${Math.round(s.acceptance_rate_24h * 100)}%` : "—"}
                     </span>
                     <span className="hero-metric-sub">Helper cascade</span>
                   </div>
                   <div className="hero-metric-box">
                     <span className="hero-metric-label">Completion Rate</span>
                     <span className="hero-metric-val val-reports">
-                      {total > 0 ? `${Math.round((completedCount / total) * 100)}%` : "88.5%"}
+                      {total > 0 ? `${Math.round((completedCount / total) * 100)}%` : "—"}
                     </span>
                     <span className="hero-metric-sub">Verified fulfilled</span>
                   </div>
@@ -413,7 +423,7 @@ export default function Dashboard() {
                     <span className="hero-metric-val val-system" style={{ fontSize: "1.2rem", color: "#10b981" }}>
                       Optimal
                     </span>
-                    <span className="hero-metric-sub">100% operational</span>
+                    <span className="hero-metric-sub">{config.extrahand_mode === "live" ? "Live data" : "Mock data"}</span>
                   </div>
                 </div>
               </div>
@@ -584,7 +594,7 @@ export default function Dashboard() {
                             <td><span className="pill tone-info text-xs">{t.category || "General"}</span></td>
                             <td>{t.customer?.name || "Customer"}</td>
                             <td className="mono font-bold" style={{ color: "var(--blue-bright, #60a5fa)" }}>
-                              ₹{t.budget || 500}
+                              {fmtMoney(t.budget)}
                             </td>
                             <td className="text-xs muted">{t.address || t.city}</td>
                             <td>
@@ -669,9 +679,6 @@ export default function Dashboard() {
           )}
         </motion.div>
       )}
-
-      {/* BIG HOVERING ANIMATED FLOATING AI AGENT BUTTON */}
-      <FloatingAIAgent />
     </Stagger>
   );
 }

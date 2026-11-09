@@ -2,14 +2,13 @@ import { AnimatePresence, LayoutGroup, motion } from "framer-motion";
 import {
   ArrowLeft,
   ClipboardList,
-  Globe,
   History,
   LayoutDashboard,
   LifeBuoy,
   MapPin,
+  MessageSquare,
   PartyPopper,
   PhoneCall,
-  Plus,
   Radio,
   Send,
   Settings,
@@ -20,7 +19,7 @@ import {
   Workflow,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { api } from "../api";
 import { fmtRelative } from "../format";
@@ -88,6 +87,17 @@ const AGENTS: Record<AgentKind, { title: string; subtitle: string; icon: LucideI
         title: "Connection",
         items: [{ to: "/whatsapp/device", label: "Device & Pairing", icon: Smartphone }],
       },
+      {
+        title: "Bulk Msgs",
+        items: [
+          {
+            to: "/whatsapp/bulk",
+            label: "Bulk Msgs",
+            icon: MessageSquare,
+            match: ["/whatsapp/bulk-msgs"],
+          },
+        ],
+      },
     ],
   },
   advertisement: {
@@ -102,17 +112,9 @@ const AGENTS: Record<AgentKind, { title: string; subtitle: string; icon: LucideI
         ],
       },
       {
-        title: "Cities",
+        title: "Regions",
         items: [
-          { to: "/advertisement?city=All-India", label: "All-India (National)", icon: Globe },
-          { to: "/advertisement?city=Siddipet", label: "Siddipet", icon: MapPin },
-          { to: "/advertisement?city=Warangal", label: "Warangal", icon: MapPin },
-          { to: "/advertisement?city=Mahabubnagar", label: "Mahabubnagar", icon: MapPin },
-          { to: "/advertisement?city=Karimnagar", label: "Karimnagar", icon: MapPin },
-          { to: "/advertisement?city=Kalwakurthy", label: "Kalwakurthy", icon: MapPin },
-          { to: "/advertisement?city=Nalgonda", label: "Nalgonda", icon: MapPin },
-          { to: "/advertisement?city=Jadcherla", label: "Jadcherla", icon: MapPin },
-          { to: "/advertisement?city=Nizamabad", label: "Nizamabad", icon: MapPin },
+          { to: "/advertisement/regions", label: "States & Cities", icon: MapPin, match: ["/advertisement/regions"] },
         ],
       },
     ],
@@ -146,7 +148,7 @@ const AGENTS: Record<AgentKind, { title: string; subtitle: string; icon: LucideI
       {
         title: "Overview",
         items: [
-          { to: "/engagement", label: "User Engagement", icon: Users, match: ["/engagement", "/reports"] },
+          { to: "/engagement/dashboard", label: "Dashboard", icon: LayoutDashboard, match: ["/engagement", "/reports"] },
         ],
       },
     ],
@@ -221,49 +223,8 @@ export function AgentWorkspace({ agent, children }: { agent: AgentKind; children
   const { pathname, hash, search } = location;
   const { data: stats } = usePoll<Stats>(api.stats, 5000);
 
-  // Dynamic cities sync for advertisement agent
-  const [advertisementCities, setAdvertisementCities] = useState<string[]>([]);
 
-  useEffect(() => {
-    if (agent === "advertisement") {
-      api.advestiment.cities().then((res) => {
-        const names = res.filter((c) => !c.is_national && c.city_name !== "All-India").map((c) => c.city_name);
-        if (names.length > 0) {
-          setAdvertisementCities(names);
-        }
-      }).catch(() => {});
-    }
-  }, [agent]);
-
-  useEffect(() => {
-    const handleCityAdded = (e: Event) => {
-      const customEvent = e as CustomEvent;
-      if (customEvent.detail?.city_name) {
-        setAdvertisementCities((prev) => Array.from(new Set([...prev, customEvent.detail.city_name])));
-      }
-    };
-    window.addEventListener("city-added", handleCityAdded);
-    return () => window.removeEventListener("city-added", handleCityAdded);
-  }, []);
-
-  // Compute actual groups with dynamic cities if advertisement
-  const resolvedGroups = def.groups.map((g) => {
-    if (agent === "advertisement" && g.title === "Cities" && advertisementCities.length > 0) {
-      return {
-        ...g,
-        items: [
-          { to: "/advertisement?city=All-India", label: "All-India (National)", icon: Globe },
-          ...advertisementCities.map((cityName) => ({
-            to: `/advertisement?city=${encodeURIComponent(cityName)}`,
-            label: cityName,
-            icon: MapPin,
-          })),
-        ],
-      };
-    }
-    return g;
-  });
-
+  const resolvedGroups = def.groups;
   const items = resolvedGroups.flatMap((g) => g.items);
   const isActive = (n: NavItem) => {
     if (n.to.includes("?")) {
@@ -364,60 +325,12 @@ export function AgentWorkspace({ agent, children }: { agent: AgentKind; children
 
         <LayoutGroup id={`ws-side-${agent}`}>
           <nav className="ws-nav" aria-label={`${def.title} sections`}>
-            {resolvedGroups.map((g) => {
-              const isCitiesGroup = g.title === "Cities";
-              return (
-                <div key={g.title} className="ws-nav-group">
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 10px 6px" }}>
-                    <span className="ws-nav-heading" style={{ padding: 0 }}>{g.title}</span>
-                    {isCitiesGroup && (
-                      <motion.button
-                        whileHover={{ scale: 1.12 }}
-                        whileTap={{ scale: 0.92 }}
-                        type="button"
-                        onClick={() => window.dispatchEvent(new CustomEvent("open-add-city-modal"))}
-                        title="Add new city with data sources"
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          width: "20px",
-                          height: "20px",
-                          borderRadius: "5px",
-                          background: "#ffffff",
-                          border: "1px solid #cbd5e1",
-                          cursor: "pointer",
-                          color: "#475569",
-                          padding: 0,
-                          boxShadow: "0 1px 2px rgba(0,0,0,0.04)"
-                        }}
-                      >
-                        <Plus size={12} />
-                      </motion.button>
-                    )}
-                  </div>
-
-                  {isCitiesGroup ? (
-                    <div
-                      className="ws-city-scroll"
-                      style={{
-                        maxHeight: "185px", // Exactly 5 items visible height
-                        overflowY: "auto",
-                        overflowX: "hidden",
-                        paddingRight: "2px",
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: "2px"
-                      }}
-                    >
-                      {g.items.map((n) => link(n, "side"))}
-                    </div>
-                  ) : (
-                    g.items.map((n) => link(n, "side"))
-                  )}
-                </div>
-              );
-            })}
+            {resolvedGroups.map((g) => (
+              <div key={g.title} className="ws-nav-group">
+                <span className="ws-nav-heading">{g.title}</span>
+                {g.items.map((n) => link(n, "side"))}
+              </div>
+            ))}
           </nav>
         </LayoutGroup>
 

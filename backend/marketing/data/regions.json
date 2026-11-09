@@ -1,0 +1,50 @@
+{
+  "_note": "KPI cards in Advertisement > States & Cities. Festivals are registered by hand from each calendar (no web search). Add a region here and it appears on the next backend start; remove one and it is removed too (if it has no events). Cities added with the Add City button are kept. region_type: national | city.",
+  "regions": [
+    {
+      "name": "All-India",
+      "region_type": "national",
+      "state": "National Festivals & Holidays"
+    },
+    {
+      "name": "Siddipet",
+      "region_type": "city",
+      "state": "Telangana"
+    },
+    {
+      "name": "Mahabubnagar",
+      "region_type": "city",
+      "state": "Telangana"
+    },
+    {
+      "name": "Warangal",
+      "region_type": "city",
+      "state": "Telangana"
+    },
+    {
+      "name": "Karimnagar",
+      "region_type": "city",
+      "state": "Telangana"
+    },
+    {
+      "name": "Kalwakurthy",
+      "region_type": "city",
+      "state": "Telangana"
+    },
+    {
+      "name": "Nalgonda",
+      "region_type": "city",
+      "state": "Telangana"
+    },
+    {
+      "name": "Jadcherla",
+      "region_type": "city",
+      "state": "Telangana"
+    },
+    {
+      "name": "Nizamabad",
+      "region_type": "city",
+      "state": "Telangana"
+    }
+  ]
+}

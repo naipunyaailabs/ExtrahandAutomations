@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api import calls, escalations, feedback, helpers, reports, system, tickets, twilio_webhooks
+from .api import auth, calls, escalations, feedback, helpers, reports, system, tickets, twilio_webhooks
 from .config import get_settings
 from .database import init_db
 from .services.worker import run_forever
@@ -34,6 +34,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(auth.router)
 import sys
 from pathlib import Path
 

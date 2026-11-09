@@ -17,6 +17,7 @@ import Settings from "./pages/Settings";
 import TicketDetail from "./pages/TicketDetail";
 import WhatsAppPage from "./pages/WhatsAppPage";
 import AdvertisementPage from "./pages/AdvertisementPage";
+import { setBranding } from "./branding";
 import type { AppConfig } from "./types";
 
 export default function App() {
@@ -46,6 +47,7 @@ function AppBody() {
 function AuthedApp() {
   const { data: config, error } = usePoll<AppConfig>(api.config, 60000);
   const location = useLocation();
+  setBranding(config?.branding);
 
   if (!config) {
     return (
@@ -69,6 +71,7 @@ function AuthedApp() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/feedback" element={<CustomerFeedbackPage />} />
           <Route path="/engagement" element={<ReportsPage />} />
+          <Route path="/engagement/dashboard" element={<ReportsPage />} />
           <Route path="/reports" element={<ReportsPage />} />
           <Route path="/settings" element={<Settings />} />
           {/* Calling Agent */}
@@ -93,8 +96,12 @@ function AuthedApp() {
           <Route path="/whatsapp/orders" element={<WhatsAppPage section="send" />} />
           <Route path="/whatsapp/replies" element={<WhatsAppPage section="send" />} />
           <Route path="/whatsapp/device" element={<WhatsAppPage section="device" />} />
+          <Route path="/whatsapp/bulk" element={<WhatsAppPage section="bulk" />} />
+          <Route path="/whatsapp/bulk-msgs" element={<WhatsAppPage section="bulk" />} />
           {/* Advertisement Engine */}
           <Route path="/advertisement" element={<AdvertisementPage />} />
+          <Route path="/advertisement/regions" element={<AdvertisementPage mode="regions" />} />
+          <Route path="/advertisement/regions/:region" element={<AdvertisementPage mode="regions" />} />
           <Route path="/advestiment" element={<AdvertisementPage />} />
         </Routes>
       </PageTransition>

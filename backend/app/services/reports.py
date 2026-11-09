@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from ..config import get_settings
 from ..models import (
     CallAttempt,
     CustomerFeedback,
@@ -153,7 +154,7 @@ def get_analytics_summary(db: Session, days: int = 30) -> Dict[str, Any]:
             "whatsapp_messages_sent": whatsapp_estimated_sent,
             "whatsapp_cost_inr": estimated_whatsapp_cost,
             "total_cost_inr": total_estimated_cost,
-            "currency": "INR",
+            "currency": get_settings().currency_code,
         },
     }
 

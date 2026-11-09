@@ -12,6 +12,15 @@ from .serializers import call_out
 router = APIRouter(prefix="/api", tags=["calls"])
 
 
+@router.get("/calls/flow")
+def calling_flow_today(db: Session = Depends(get_db)):
+    """Calling Agent dispatch flow for today (India time): real-customer orders live from ExtraHand, plus today's
+    calls, follow-ups and escalations from this app (simulator calls counted separately)."""
+    from ..services.dispatch_flow import calling_flow
+
+    return calling_flow(db)
+
+
 @router.get("/calls")
 def list_calls(active: bool = False, purpose: str | None = None, limit: int = 200, db: Session = Depends(get_db)):
     q = db.query(CallAttempt)

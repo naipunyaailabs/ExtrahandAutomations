@@ -191,7 +191,7 @@ export default function Settings() {
             <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
               <input
                 type="time"
-                value={form.calling_hours_start || "09:00"}
+                value={form.calling_hours_start ?? ""}
                 onChange={(e) => setForm({ ...form, calling_hours_start: e.target.value })}
                 style={{
                   padding: "0.45rem",
@@ -204,7 +204,7 @@ export default function Settings() {
               <span>to</span>
               <input
                 type="time"
-                value={form.calling_hours_end || "21:00"}
+                value={form.calling_hours_end ?? ""}
                 onChange={(e) => setForm({ ...form, calling_hours_end: e.target.value })}
                 style={{
                   padding: "0.45rem",
@@ -225,7 +225,7 @@ export default function Settings() {
               type="number"
               min={0}
               max={1440}
-              value={form.feedback_call_delay_minutes ?? 30}
+              value={form.feedback_call_delay_minutes ?? ""}
               onChange={(e) => setForm({ ...form, feedback_call_delay_minutes: Number(e.target.value) })}
               style={{
                 width: "100%",

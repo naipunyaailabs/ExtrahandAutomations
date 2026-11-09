@@ -1,0 +1,165 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 1200" width="100%" height="100%" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+  <defs>
+    <!-- Background Gradient -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7c2d12" />
+      <stop offset="50%" stop-color="#9a3412" />
+      <stop offset="100%" stop-color="#c2410c" />
+    </linearGradient>
+
+    <!-- Card Overlay Gradient -->
+    <linearGradient id="cardGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.96" />
+      <stop offset="100%" stop-color="#f8fafc" stop-opacity="0.98" />
+    </linearGradient>
+
+    <!-- Gold Accent Gradient -->
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#f59e0b" />
+      <stop offset="50%" stop-color="#fbbf24" />
+      <stop offset="100%" stop-color="#d97706" />
+    </linearGradient>
+
+    <!-- Brand Pill Gradient -->
+    <linearGradient id="brandGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#4f46e5" />
+      <stop offset="100%" stop-color="#7c3aed" />
+    </linearGradient>
+
+    <!-- Shadows -->
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#000000" flood-opacity="0.35" />
+    </filter>
+    <filter id="softShadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#000000" flood-opacity="0.15" />
+    </filter>
+  </defs>
+
+  <!-- BACKGROUND POSTER -->
+  <rect width="900" height="1200" fill="url(#bgGrad)" />
+
+  <!-- DECORATIVE CULTURAL ORNAMENTS -->
+  
+                  <circle cx="780" cy="120" r="140" fill="#f59e0b" opacity="0.2" />
+                  <path d="M 0 0 L 150 0 L 0 150 Z" fill="#ea580c" opacity="0.1" />
+                
+
+  <!-- TOP BRANDING BAR -->
+  <g transform="translate(60, 45)">
+    <!-- ExtraHand Logo Badge -->
+    <rect width="210" height="42" rx="21" fill="#ffffff" filter="url(#softShadow)" />
+    <circle cx="25" cy="21" r="14" fill="#4f46e5" />
+    <path d="M 18 21 L 23 26 L 31 16" stroke="#ffffff" stroke-width="3" fill="none" stroke-linecap="round" />
+    <text x="48" y="27" font-size="16" font-weight="800" fill="#1e1b4b" letter-spacing="0.5">EXTRAHAND</text>
+
+    <!-- Verified Badge -->
+    <rect x="570" y="0" width="210" height="42" rx="21" fill="rgba(255,255,255,0.2)" stroke="rgba(255,255,255,0.4)" stroke-width="1.5" />
+    <text x="675" y="26" font-size="13" font-weight="700" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">★ OFFICIAL PARTNER</text>
+  </g>
+
+  <!-- MAIN POSTER CONTENT CONTAINER -->
+  <g transform="translate(60, 115)">
+    <!-- White Content Card -->
+    <rect width="780" height="1025" rx="28" fill="url(#cardGrad)" filter="url(#shadow)" stroke="rgba(255,255,255,0.7)" stroke-width="2" />
+
+    <!-- TOP HEADER PILL: CITY & SCOPE -->
+    <g transform="translate(40, 35)">
+      <rect width="700" height="44" rx="22" fill="#fff7ed" />
+      <circle cx="24" cy="22" r="6" fill="#ea580c" />
+      <text x="40" y="27" font-size="14" font-weight="800" fill="#9a3412" letter-spacing="1.2">
+        📍 SIDDIPET SPECIAL CELEBRATION • LOCAL TEMPLE FESTIVAL
+      </text>
+    </g>
+
+    <!-- CULTURAL HERO VECTOR ART -->
+    <g transform="translate(40, 95)">
+      <rect width="700" height="340" rx="20" fill="#fffaf5" stroke="#fed7aa" stroke-width="1.5" />
+      
+                  <!-- Traditional South Indian Temple Gopuram & Sacred Lamp -->
+                  <g transform="translate(350, 165)">
+                    <!-- Gopuram Silhouette -->
+                    <polygon points="-120,110 120,110 95,50 -95,50" fill="#ea580c" opacity="0.8" />
+                    <polygon points="-90,50 90,50 70,-5 -70,-5" fill="#c2410c" />
+                    <polygon points="-65,-5 65,-5 45,-60 -45,-60" fill="#9a3412" />
+                    <polygon points="-40,-60 40,-60 20,-105 -20,-105" fill="#7c2d12" />
+                    <!-- Kalasam Peaks -->
+                    <circle cx="-16" cy="-115" r="6" fill="#fbbf24" />
+                    <circle cx="0" cy="-120" r="8" fill="#fbbf24" />
+                    <circle cx="16" cy="-115" r="6" fill="#fbbf24" />
+                    <!-- Sacred Diya Front Left -->
+                    <ellipse cx="-160" cy="95" rx="35" ry="12" fill="#d97706" />
+                    <path d="M -160 85 Q -150 55 -160 45 Q -170 55 -160 85 Z" fill="#f59e0b" />
+                    <!-- Sacred Diya Front Right -->
+                    <ellipse cx="160" cy="95" rx="35" ry="12" fill="#d97706" />
+                    <path d="M 160 85 Q 170 55 160 45 Q 150 55 160 85 Z" fill="#f59e0b" />
+                  </g>
+                
+    </g>
+
+    <!-- EVENT TITLE & OCCASION -->
+    <g transform="translate(40, 470)">
+      <text x="350" y="42" font-size="34" font-weight="900" fill="#0f172a" text-anchor="middle" letter-spacing="-0.5">
+        Karthika Masam Sri Koti Lingeshwara Swamy Deepotsavam
+      </text>
+      <text x="350" y="76" font-size="16" font-weight="600" fill="#64748b" text-anchor="middle">
+        Celebrate this joyous occasion with complete peace of mind
+      </text>
+    </g>
+
+    <!-- DATE & POPULAR SERVICES BADGES -->
+    <g transform="translate(70, 580)">
+      <!-- Date Strip -->
+      <rect width="640" height="58" rx="14" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1" />
+      <text x="40" y="36" font-size="20">📅</text>
+      <text x="75" y="36" font-size="15" font-weight="800" fill="#1e293b">EVENT DATES:</text>
+      <text x="195" y="36" font-size="15" font-weight="700" fill="#ea580c">2026-11-18 to 2026-11-24</text>
+      <text x="590" y="36" font-size="13" font-weight="700" fill="#059669">✓ VERIFIED</text>
+    </g>
+
+    <!-- SERVICES PILL STRIP -->
+    <g transform="translate(70, 655)">
+      <rect width="640" height="68" rx="14" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1" />
+      <text x="25" y="32" font-size="12" font-weight="800" fill="#7e22ce" letter-spacing="1">DEMAND SURGE ON HOME SERVICES</text>
+      <text x="25" y="54" font-size="14" font-weight="700" fill="#1e1b4b">Popular: Mandir &amp; Pooja Room Cleaning • Illumination &amp; Electrical Wiring • Water Tank Cleaning</text>
+      <rect x="520" y="16" width="100" height="36" rx="8" fill="#7e22ce" />
+      <text x="570" y="39" font-size="12" font-weight="750" fill="#ffffff" text-anchor="middle">PRIORITY</text>
+    </g>
+
+    <!-- SPECIAL FESTIVAL DISCOUNT COUPON BOX -->
+    <g transform="translate(70, 742)">
+      <!-- Outer Voucher Box -->
+      <rect width="640" height="135" rx="18" fill="url(#goldGrad)" filter="url(#softShadow)" />
+      <rect x="6" y="6" width="628" height="123" rx="14" fill="#ffffff" />
+
+      <!-- Left Discount Percent -->
+      <rect x="24" y="24" width="130" height="87" rx="12" fill="#fffbeb" stroke="#fcd34d" stroke-width="1" />
+      <text x="89" y="66" font-size="34" font-weight="900" fill="#b45309" text-anchor="middle">25%</text>
+      <text x="89" y="94" font-size="12" font-weight="800" fill="#78350f" text-anchor="middle">OFF TODAY</text>
+
+      <!-- Middle Promo Text -->
+      <text x="175" y="52" font-size="18" font-weight="800" fill="#0f172a">Festival Special Booking Offer</text>
+      <text x="175" y="74" font-size="13" font-weight="550" fill="#475569">Use code at checkout to claim instant festival discount</text>
+
+      <!-- Coupon Code Box -->
+      <rect x="175" y="86" width="220" height="32" rx="6" fill="#f8fafc" stroke="#94a3b8" stroke-dasharray="4,4" stroke-width="1.5" />
+      <text x="285" y="108" font-size="15" font-weight="800" fill="#0284c7" text-anchor="middle" letter-spacing="1.5">
+        🏷 KOTILINGA25
+      </text>
+
+      <!-- Claim Button -->
+      <rect x="440" y="44" width="170" height="52" rx="12" fill="url(#brandGrad)" />
+      <text x="525" y="76" font-size="15" font-weight="800" fill="#ffffff" text-anchor="middle">BOOK NOW →</text>
+    </g>
+
+    <!-- FOOTER TRUST & DISPATCH BAR -->
+    <g transform="translate(40, 905)">
+      <rect width="700" height="85" rx="16" fill="#0f172a" />
+      <text x="35" y="36" font-size="14" font-weight="750" fill="#ffffff">ExtraHand Guaranteed Home Assistance</text>
+      <text x="35" y="60" font-size="12" font-weight="500" fill="#94a3b8">Background-Checked Helpers • Fixed Pricing • 60-Minute Rapid Dispatch</text>
+
+      <!-- Contact Pill -->
+      <rect x="490" y="20" width="185" height="45" rx="10" fill="#22c55e" />
+      <text x="582" y="48" font-size="13" font-weight="800" fill="#ffffff" text-anchor="middle">WhatsApp Support</text>
+    </g>
+  </g>
+</svg>

@@ -12,14 +12,18 @@ Workflow:
 """
 
 import asyncio
+import json
 import logging
 import math
 import threading
+from functools import lru_cache
+from pathlib import Path
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
+from app.branding import company, task_link
 from app.config import get_settings
 from app.database import SessionLocal
 from app.models import DispatchStatus, Event, Helper, Ticket, utcnow
@@ -30,24 +34,17 @@ from whatsapp.meta_client import get_meta_whatsapp_client
 
 logger = logging.getLogger("whatsapp.dispatch_agent")
 
+_AREAS_FILE = Path(__file__).resolve().parent / "data" / "city_areas.json"
 
-HYDERABAD_SYNONYMS = {
-    "hyderabad", "secunderabad", "cyberabad", "tarur", "lb nagar", "gachibowli", "kukatpally",
-    "madhapur", "kondapur", "jubilee hills", "banjara hills", "begumpet", "ameerpet", "miyapur",
-    "hitec city", "uppal", "dilsukhnagar", "charminar", "lingampally", "chandanagar", "kothapet",
-    "malakpet", "nampally", "abids", "sainikpuri", "alwal", "malkajgiri", "tarnaka", "habsiguda",
-    "nacharam", "mallapur", "ecil", "kompally", "bowenpally", "marredpally", "attapur", "mehdipatnam",
-    "tolichowki", "manikonda", "narsingi", "kokapet", "tellapur", "gopanpally", "nallagandla",
-    "hafeezpet", "nizampet", "bachupally", "kphb", "moosapet", "erragadda", "sr nagar", "sanathnagar",
-    "balanagar", "jeedimetla", "quthbullapur", "chintal", "suchitra", "shamshabad", "rajendranagar",
-    "siddipet", "marpadga", "sangareddy", "medchal", "shadnagar"
-}
 
-BANGALORE_SYNONYMS = {
-    "bangalore", "bengaluru", "indiranagar", "koramangala", "whitefield", "hsr layout",
-    "electronic city", "jayanagar", "jp nagar", "bellandur", "marathahalli", "hebbal",
-    "yelahanka", "banashankari", "malleshwaram", "rajajinagar", "btm layout", "sarjapur"
-}
+@lru_cache
+def city_area_groups() -> List[set]:
+    """Area-name groups from data/city_areas.json (edit that file to add cities)."""
+    data = json.loads(_AREAS_FILE.read_text(encoding="utf-8"))
+    return [{a.lower() for a in names} for names in data.get("groups", {}).values()]
+
+
+
 
 
 class WhatsAppTaskDispatchAgent:
@@ -65,7 +62,7 @@ class WhatsAppTaskDispatchAgent:
     ) -> List[Dict[str, Any]]:
         """Strictly filter helpers matching BOTH the requested service and customer location."""
         rt = runtime_settings(db)
-        effective_radius = max_radius_km if max_radius_km is not None else (getattr(rt, "match_radius_km", 10.0) or 10.0)
+        effective_radius = max_radius_km if max_radius_km is not None else (rt.match_radius_km or self.settings.match_radius_km)
 
         # Query all active helpers with a valid phone number
         helpers = db.query(Helper).filter(
@@ -76,8 +73,12 @@ class WhatsAppTaskDispatchAgent:
         eligible: List[Dict[str, Any]] = []
         seen_phones = set()
 
+        from app.services.real_data import is_real_helper
+
         for h in helpers:
-            clean_phone = "".join(c for c in (h.phone or "") if c.isdigit())[-10:]
+            if not is_real_helper(h):
+                continue  # tester / test / mock account: never messaged
+            clean_phone = "".join(c for c in (h.phone or "") if c.isdigit())[-self.settings.phone_local_digits:]
             if not clean_phone or clean_phone in seen_phones:
                 continue
 
@@ -101,22 +102,18 @@ class WhatsAppTaskDispatchAgent:
                         dist_km = round(d, 1)
                         location_matched = True
                     else:
-                        # Exceeded maximum allowed radius (below 10 km) - strictly exclude
+                        # Outside the configured radius - exclude
                         continue
 
             t_loc = f"{ticket.city or ''} {ticket.address or ''}".lower().strip()
             h_loc = f"{h.city or ''} {h.address or ''} {' '.join(h.work_areas or [])}".lower().strip()
 
             if not location_matched and not has_coords:
+                # Matched by name only, so the distance is unknown (dist_km stays None)
                 if ticket.city and h.city and (ticket.city.strip().lower() in h.city.strip().lower() or h.city.strip().lower() in ticket.city.strip().lower()):
                     location_matched = True
-                    dist_km = 4.5
-                elif any(s in t_loc for s in HYDERABAD_SYNONYMS) and any(s in h_loc for s in HYDERABAD_SYNONYMS):
+                elif any(any(a in t_loc for a in group) and any(a in h_loc for a in group) for group in city_area_groups()):
                     location_matched = True
-                    dist_km = 5.2
-                elif any(s in t_loc for s in BANGALORE_SYNONYMS) and any(s in h_loc for s in BANGALORE_SYNONYMS):
-                    location_matched = True
-                    dist_km = 5.2
 
             if not location_matched:
                 continue
@@ -146,8 +143,8 @@ class WhatsAppTaskDispatchAgent:
         partner_first_name = partner.get("name", "").split()[0] or "Partner"
         category = ticket.category or "General Service"
         title = ticket.title or f"{category} Service"
-        loc = ticket.address or ticket.city or "Hyderabad"
-        budget = f"₹{ticket.budget}" if ticket.budget else "Standard Rate"
+        loc = ticket.address or ticket.city or "-"
+        budget = f"{self.settings.currency_symbol}{ticket.budget}" if ticket.budget else "To be confirmed"
 
         scheduled_str = "Immediate / Flexible"
         if ticket.scheduled_at:
@@ -156,19 +153,19 @@ class WhatsAppTaskDispatchAgent:
             except Exception:
                 scheduled_str = str(ticket.scheduled_at)
 
-        app_url = f"https://extrahand.in/tasks/{ticket.id}?helper={partner['helper_id']}&source=whatsapp_agent"
+        app_url = task_link(ticket.id, helper=str(partner["helper_id"]), source="whatsapp_agent")
 
         dist_info = f" ({partner['distance_km']} km away)" if partner.get("distance_km") else ""
 
         message = (
-            f"🔔 *New ExtraHand Work Order Alert*\n\n"
+            f"🔔 *New {company()} Work Order Alert*\n\n"
             f"Hello *{partner_first_name}*! A new task matching your skill (*{category}*) has been booked nearby{dist_info}:\n\n"
             f"📌 *Task:* {title}\n"
             f"📍 *Location:* {loc}\n"
             f"💰 *Payout:* {budget}\n"
             f"⏰ *Scheduled:* {scheduled_str}\n"
             f"🆔 *Ticket ID:* #{ticket.id}\n\n"
-            f"⚡ *Accept this task directly in the ExtraHand Partner App:*\n"
+            f"⚡ *Accept this task directly in the {company()} Partner App:*\n"
             f"{app_url}\n\n"
             f"_Reply 'YES' to accept or 'PASS' to decline._"
         )

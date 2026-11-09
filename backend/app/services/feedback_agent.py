@@ -57,7 +57,7 @@ def get_feedback_script(ticket: Ticket, helper_name: str | None, language: str =
     s = get_settings()
     cust = ticket.customer_name or "Valued Customer"
     task = ticket.title or ticket.category or "service"
-    helper = helper_name or ticket.assignee_name or "our ExtraHand partner"
+    helper = helper_name or ticket.assignee_name or f"our {get_settings().company_name} partner"
 
     lang = (language or "en").lower()
     if lang.startswith("te"):

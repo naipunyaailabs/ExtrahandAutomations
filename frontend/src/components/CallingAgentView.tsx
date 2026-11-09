@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   Clock,
   History,
+  Layers,
   LifeBuoy,
   MapPin,
   PhoneCall,
@@ -386,6 +387,8 @@ export function CallingAgentView({
   // - upcoming: scheduled in future (Upcoming Tasks)
   // - past: scheduled before today (Previous Tasks)
   const getDateCategory = (t: TicketType): "today" | "upcoming" | "past" => {
+    // The backend decides (same rule as the dashboards: booked today or scheduled for today, India time)
+    if (t.date_status === "today" || t.date_status === "upcoming" || t.date_status === "past") return t.date_status;
     const dateStr = t.scheduled_at || t.created_at;
     if (!dateStr) return "past";
     const target = new Date(dateStr);
@@ -1072,7 +1075,135 @@ export function CallingAgentView({
         {/* SECTION B: TICKETS & TASKS LIST VIEW */}
         {activeSection === "tasks" && (
           <div>
-            {/* Search Bar (Moved down below the header) */}
+            {/* 4 Interactive Big KPI Cards for Date Category Filtering */}
+            <div className="task-kpi-grid">
+              {/* Card 1: All Tasks */}
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => setDateFilter("all")}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setDateFilter("all"); }}
+                className={`task-kpi-card ${dateFilter === "all" ? "task-kpi-active" : ""}`}
+                title="Filter by all tasks"
+              >
+                <div className="task-kpi-top">
+                  <div className="task-kpi-icon-wrap" style={{ background: "rgba(37, 99, 235, 0.12)", color: "#2563eb" }}>
+                    <Layers size={16} />
+                  </div>
+                  <span className="task-kpi-badge" style={{ background: "rgba(37, 99, 235, 0.1)", color: "#1d4ed8" }}>
+                    {dateFilter === "all" ? "Selected" : "All"}
+                  </span>
+                </div>
+                <div className="task-kpi-middle">
+                  <span className="task-kpi-label">All Tasks</span>
+                  <span className="task-kpi-value" style={{ color: "var(--brand, #2563eb)" }}>
+                    <AnimatedNumber value={dateCounts.all} />
+                  </span>
+                </div>
+                <div className="task-kpi-footer">
+                  <span className="task-kpi-meta">Total operational tickets</span>
+                  {dateFilter === "all" && (
+                    <span className="task-kpi-indicator" style={{ color: "#2563eb" }}>● Active</span>
+                  )}
+                </div>
+              </div>
+
+              {/* Card 2: Current Tasks (Today) */}
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => setDateFilter("today")}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setDateFilter("today"); }}
+                className={`task-kpi-card ${dateFilter === "today" ? "task-kpi-active active-today" : ""}`}
+                title="Filter by tasks due today"
+              >
+                <div className="task-kpi-top">
+                  <div className="task-kpi-icon-wrap" style={{ background: "rgba(5, 150, 105, 0.12)", color: "#059669" }}>
+                    <Clock size={16} />
+                  </div>
+                  <span className="task-kpi-badge" style={{ background: "rgba(5, 150, 105, 0.12)", color: "#047857", display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                    <span className="dot pulse success" style={{ width: 5, height: 5 }} />
+                    Today
+                  </span>
+                </div>
+                <div className="task-kpi-middle">
+                  <span className="task-kpi-label">Current</span>
+                  <span className="task-kpi-value" style={{ color: "#059669" }}>
+                    <AnimatedNumber value={dateCounts.today} />
+                  </span>
+                </div>
+                <div className="task-kpi-footer">
+                  <span className="task-kpi-meta">Due today · urgent priority</span>
+                  {dateFilter === "today" && (
+                    <span className="task-kpi-indicator" style={{ color: "#059669" }}>● Active</span>
+                  )}
+                </div>
+              </div>
+
+              {/* Card 3: Upcoming Tasks */}
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => setDateFilter("upcoming")}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setDateFilter("upcoming"); }}
+                className={`task-kpi-card ${dateFilter === "upcoming" ? "task-kpi-active active-upcoming" : ""}`}
+                title="Filter by upcoming scheduled tasks"
+              >
+                <div className="task-kpi-top">
+                  <div className="task-kpi-icon-wrap" style={{ background: "rgba(234, 88, 12, 0.12)", color: "#ea580c" }}>
+                    <Calendar size={16} />
+                  </div>
+                  <span className="task-kpi-badge" style={{ background: "rgba(234, 88, 12, 0.12)", color: "#c2410c" }}>
+                    Future
+                  </span>
+                </div>
+                <div className="task-kpi-middle">
+                  <span className="task-kpi-label">Upcoming</span>
+                  <span className="task-kpi-value" style={{ color: "#ea580c" }}>
+                    <AnimatedNumber value={dateCounts.upcoming} />
+                  </span>
+                </div>
+                <div className="task-kpi-footer">
+                  <span className="task-kpi-meta">Scheduled for later dates</span>
+                  {dateFilter === "upcoming" && (
+                    <span className="task-kpi-indicator" style={{ color: "#ea580c" }}>● Active</span>
+                  )}
+                </div>
+              </div>
+
+              {/* Card 4: Previous Tasks */}
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => setDateFilter("past")}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setDateFilter("past"); }}
+                className={`task-kpi-card ${dateFilter === "past" ? "task-kpi-active active-past" : ""}`}
+                title="Filter by past/completed tasks"
+              >
+                <div className="task-kpi-top">
+                  <div className="task-kpi-icon-wrap" style={{ background: "rgba(202, 138, 4, 0.12)", color: "#ca8a04" }}>
+                    <History size={16} />
+                  </div>
+                  <span className="task-kpi-badge" style={{ background: "rgba(202, 138, 4, 0.12)", color: "#a16207" }}>
+                    History
+                  </span>
+                </div>
+                <div className="task-kpi-middle">
+                  <span className="task-kpi-label">Previous</span>
+                  <span className="task-kpi-value" style={{ color: "#ca8a04" }}>
+                    <AnimatedNumber value={dateCounts.past} />
+                  </span>
+                </div>
+                <div className="task-kpi-footer">
+                  <span className="task-kpi-meta">Past &amp; completed work</span>
+                  {dateFilter === "past" && (
+                    <span className="task-kpi-indicator" style={{ color: "#ca8a04" }}>● Active</span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Search Bar */}
             <div style={{ marginBottom: "1rem" }}>
               <label className="search" style={{ margin: 0, width: "100%", display: "flex", alignItems: "center" }}>
                 <Search size={16} className="search-icon" />
@@ -1083,41 +1214,6 @@ export function CallingAgentView({
                   style={{ width: "100%", padding: "10px 14px 10px 38px", fontSize: "14px", borderRadius: "8px" }}
                 />
               </label>
-            </div>
-
-            {/* Separated Date Filter Buttons */}
-            <div style={{ display: "flex", gap: "8px", marginBottom: "10px", flexWrap: "wrap" }}>
-              <button
-                type="button"
-                className={`btn btn-sm ${dateFilter === "all" ? "btn-primary" : "btn-secondary"}`}
-                onClick={() => setDateFilter("all")}
-              >
-                All Tasks ({dateCounts.all})
-              </button>
-              <button
-                type="button"
-                className={`btn btn-sm ${dateFilter === "today" ? "btn-primary" : "btn-secondary"}`}
-                onClick={() => setDateFilter("today")}
-                style={dateFilter === "today" ? { background: "linear-gradient(135deg, #059669 0%, #047857 100%)", borderColor: "#047857", color: "#fff", boxShadow: "0 2px 6px rgba(5, 150, 105, 0.25)" } : {}}
-              >
-                Current ({dateCounts.today})
-              </button>
-              <button
-                type="button"
-                className={`btn btn-sm ${dateFilter === "upcoming" ? "btn-primary" : "btn-secondary"}`}
-                onClick={() => setDateFilter("upcoming")}
-                style={dateFilter === "upcoming" ? { background: "#ea580c", borderColor: "#ea580c", color: "#fff" } : {}}
-              >
-                Upcoming ({dateCounts.upcoming})
-              </button>
-              <button
-                type="button"
-                className={`btn btn-sm ${dateFilter === "past" ? "btn-primary" : "btn-secondary"}`}
-                onClick={() => setDateFilter("past")}
-                style={dateFilter === "past" ? { background: "#ca8a04", borderColor: "#ca8a04", color: "#fff" } : {}}
-              >
-                Previous ({dateCounts.past})
-              </button>
             </div>
 
             {/* Status Filter Tabs */}
@@ -1329,7 +1425,7 @@ export function CallingAgentView({
         </span>
       );
     } else if (isRating) {
-      const rateNum = c.outcome?.replace(/\D/g, "") || "5";
+      const rateNum = c.outcome?.replace(/\D/g, "") || "?";
       outcomeBadge = (
         <span className="badge-outcome-rating">
           <Sparkles size={12} />
@@ -1498,7 +1594,7 @@ export function CallingAgentView({
                     {t.title || t.id}
                   </b>
                   <div className="small muted">
-                    {t.address || t.city || "Location"} · ₹{t.budget || 450}
+                    {t.address || t.city || "Location"} · {fmtMoney(t.budget)}
                   </div>
                 </div>
                 <span className="chip live" style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>

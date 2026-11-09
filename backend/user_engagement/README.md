@@ -1,18 +1,41 @@
-# Service 4: User Engagement & Operational Performance Analytics
+# Service 4: User Engagement
 
-## Overview
-This service monitors, computes, and reports end-to-end user engagement, helper cascade acceptance rates, work order fulfillment rates, customer satisfaction (CSAT), and audit-ready data exports.
+Everything for User Engagement lives in this folder:
 
-## Core Card KPIs
-1. **Total Volume**: Total work orders logged across all ExtraHand service categories.
-2. **Acceptance Rate**: Helper cascade acceptance rate (percentage of dispatches accepted).
-3. **Completion Rate**: Verified fulfilled rate (percentage of bookings successfully completed).
-4. **Audit Ready**: Instant CSV export streams for executive compliance and financial audit review.
+| File | What it does |
+|---|---|
+| `extrahand_data.py` | Reads live data from the ExtraHand Main Admin API (customers, Works, support tickets) |
+| `service.py` | Dashboard numbers for today, real-customer orders, operational KPIs and CSV exports |
+| `categories.py` | Category module: customers of a month in Diamond / Gold / Platinum / Silver |
+| `router.py` | The `/api/engagement/...` endpoints |
+| `models.py` | Response models |
+
+## Data source (see `Doc/data.docx` and `Doc/Access and clarification.docx`)
+Live from the ExtraHand Main Admin API when `EXTRAHAND_MODE=live` (credentials in `backend/.env`, never in code):
+
+- `GET /users?role=customer` - registered customers (total, new today, new this month)
+- `GET /tasks` - every Work, all pages (today's / this month's orders, status, active customers)
+- `GET /support/tickets` - customer-care tickets (shown as unavailable while the ExtraHand API returns an error)
+
+**Real customers only:** Works posted by the ExtraHand team (`isTeamPosted: true` / `postedBy: team`, which use
+test names such as "Customer" and "James Smith") and test accounts (`isPaymentTester`, or a name containing "test")
+are left out of every number. The dashboard says how many were left out.
+
+The app's single ExtraHand login is reused (shared with dispatch). The data is read when the backend starts and then
+every **5 minutes** (the approved polling interval) in the background; Works are deduplicated by id.
+"Today" and "this month" are **India time (IST, UTC+05:30)**. If ExtraHand cannot be reached, the dashboard shows
+the local database copy and says so (it never shows mock data).
+
+Order outcome: `completed` = success, `cancelled` / `failed` / `expired` / `rejected` = fail, anything else
+(open, assigned, in progress...) = pending. Today's orders = Works booked or scheduled today.
 
 ## Endpoints
-- `GET /api/engagement/kpis` - Headline KPIs matching the Reports & Analytics card
-- `GET /api/engagement/overview` - Multi-dimensional operational breakdown
-- `GET /api/engagement/export?type=bookings|calls|feedback|helpers` - Downloadable CSV exports
-- `GET /api/reports/summary` - Backward compatible summary endpoint
-- `GET /api/reports/export` - Backward compatible export endpoint
+- `GET /api/engagement/dashboard` - today's dashboard (date, source, customers, active users, orders, support)
+- `GET /api/engagement/categories?month=YYYY-MM` - customers of the month by orders placed: Diamond 8+, Gold 5-7,
+  Platinum 1-4, Silver 0 (orders booked or scheduled in the month; default this month)
+- `GET /api/engagement/categories/silver?page=N` - Silver customers (no order in the month), 50 per page
+- `GET /api/engagement/kpis` - operational KPIs (volume, acceptance rate, completion rate)
+- `GET /api/engagement/overview` - bookings, calls, CSAT and cost overview
+- `GET /api/engagement/export?type=bookings|calls|feedback|helpers` - CSV exports
+- `GET /api/reports/summary`, `GET /api/reports/export` - older paths, kept for compatibility
 

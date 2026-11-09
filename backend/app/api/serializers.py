@@ -19,14 +19,26 @@ def ticket_out(t: Ticket) -> dict:
     is_upcoming = False
     is_past = False
     
-    target_dt = t.scheduled_at or t.created_at
-    if target_dt:
-        if target_dt.tzinfo is None:
-            target_dt = target_dt.replace(tzinfo=timezone.utc).astimezone(IST)
-        else:
-            target_dt = target_dt.astimezone(IST)
-        target_date = target_dt.date()
-        today_date = now.date()
+    def ist_date(dt):
+        if not dt:
+            return None
+        return (dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt).astimezone(IST).date()
+
+    # When the customer booked (ExtraHand's createdAt; created_at here is when the row was copied)
+    raw = t.raw if isinstance(t.raw, dict) else {}
+    booked_at = None
+    if isinstance(raw.get("createdAt"), str):
+        try:
+            booked_at = datetime.fromisoformat(raw["createdAt"].replace("Z", "+00:00"))
+        except ValueError:
+            booked_at = None
+    booked_date = ist_date(booked_at) or ist_date(t.created_at)
+    scheduled_date = ist_date(t.scheduled_at)
+    today_date = now.date()
+
+    # Same rule as the dashboards: "today" = booked today or scheduled for today
+    target_date = today_date if today_date in (booked_date, scheduled_date) else (scheduled_date or booked_date)
+    if target_date:
         days_diff = (target_date - today_date).days
         
         if days_diff == 0:
@@ -49,6 +61,7 @@ def ticket_out(t: Ticket) -> dict:
                      "phone": t.assignee_phone} if t.assignee_id else None,
         "assignment_local_only": t.assignment_local_only,
         "created_at": iso(t.created_at),
+        "booked_at": booked_at.astimezone(timezone.utc).replace(tzinfo=None).isoformat() + "Z" if booked_at else None,
         "synced_at": iso(t.synced_at), "updated_at": iso(t.updated_at),
         "date_status": date_status,
         "is_today": is_today,

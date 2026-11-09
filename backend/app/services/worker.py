@@ -114,7 +114,10 @@ def tick() -> None:
                         stats.get("assigned", 0),
                     )
             except Exception as e:  # noqa: BLE001
-                last_sync.update(at=utcnow(), ok=False, error=str(e))
+                err_msg = str(e)
+                if "version" in err_msg or "No matching document" in err_msg:
+                    err_msg = "Temporary login collision on ExtraHand server (retrying shortly)"
+                last_sync.update(at=utcnow(), ok=False, error=err_msg)
                 log.warning("[ExtraHand Sync Error] %s", e)
 
         r = runtime_settings(db)

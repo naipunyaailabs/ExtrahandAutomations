@@ -82,13 +82,13 @@ def runtime_settings(db: Session) -> RuntimeSettings:
         "workflow_customer_feedback_enabled": True,
         "workflow_whatsapp_dispatch_enabled": True,
         "workflow_whatsapp_feedback_enabled": True,
-        "calling_hours_start": "09:00",
-        "calling_hours_end": "21:00",
-        "feedback_call_delay_minutes": 15,
-        "preferred_language": "en-IN",
-        "max_helper_call_attempts": 3,
-        "cost_per_call_minute": 0.50,
-        "cost_per_whatsapp_msg": 0.25,
+        "calling_hours_start": s.calling_hours_start,
+        "calling_hours_end": s.calling_hours_end,
+        "feedback_call_delay_minutes": s.feedback_call_delay_minutes,
+        "preferred_language": s.tts_language,
+        "max_helper_call_attempts": s.max_helper_call_attempts,
+        "cost_per_call_minute": s.cost_per_call_minute,
+        "cost_per_whatsapp_msg": s.cost_per_whatsapp_msg,
     }
     for row in db.query(AppSetting).filter(AppSetting.key.in_(EDITABLE_KEYS)):
         raw[row.key] = row.value

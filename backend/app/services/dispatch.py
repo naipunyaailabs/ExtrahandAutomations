@@ -12,6 +12,7 @@ from ..models import CallAttempt, DispatchRun, DispatchStatus, Escalation, Helpe
 from ..telephony import TelephonyProvider, get_provider
 from .common import engine_lock, log_event, runtime_settings
 from .ivr import ACTIVE_STATUSES, dispatch_script
+from .real_data import is_real_helper, is_real_user
 
 log = logging.getLogger(__name__)
 
@@ -136,6 +137,8 @@ def find_candidates(db: Session, ticket: Ticket) -> tuple[list[dict], str]:
             if not rec["id"] or rec["id"] == "None" or rec["id"] in seen:
                 continue
             seen.add(rec["id"])
+            if not is_real_user(item if isinstance(item, dict) else {}, rec["id"]):
+                continue  # tester / test / mock account: never called
             upsert_helper(db, rec)
             if not rec["phone"]:
                 continue
@@ -160,7 +163,7 @@ def find_candidates(db: Session, ticket: Ticket) -> tuple[list[dict], str]:
     else:
         # Load and filter directly from local DB cache
         for h in db.query(Helper).filter(Helper.phone.isnot(None)).all():
-            if str(h.id) in seen:
+            if str(h.id) in seen or not is_real_helper(h):
                 continue
             seen.add(str(h.id))
             dist = None

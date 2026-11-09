@@ -22,9 +22,11 @@ def list_helpers(
     status: str | None = None,
     is_verified: bool | None = None,
     can_accept_tasks: bool | None = None,
+    real_only: bool = True,
     db: Session = Depends(get_db),
 ):
-    """Retrieve helper directory with optional filters for service, location, status, and verification."""
+    """Retrieve helper directory with optional filters for service, location, status, and verification.
+    By default only real helpers (no mock rows, no testers, no test-named accounts); real_only=false lists all."""
     # If database is empty, auto-sync helpers
     if db.query(Helper).count() == 0:
         sync_helpers(db)
@@ -64,6 +66,11 @@ def list_helpers(
     q_lower = q.strip().lower() if q else None
     service_lower = service.strip().lower() if service else None
     loc_lower = location.strip().lower() if location else None
+
+    if real_only:
+        from ..services.dispatch_flow import is_real_helper
+
+        helpers_list = [h for h in helpers_list if is_real_helper(h)]
 
     for h in helpers_list:
         skills = [s.lower() for s in (h.skills or [])]

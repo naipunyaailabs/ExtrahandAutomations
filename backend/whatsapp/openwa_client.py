@@ -28,14 +28,14 @@ class OpenWAClient:
 
     def __init__(self, base_url: Optional[str] = None, api_key: Optional[str] = None, default_session_id: Optional[str] = None):
         settings = get_settings()
-        raw_url = base_url or getattr(settings, "whatsapp_gateway_url", "http://127.0.0.1:2785")
+        raw_url = base_url or settings.whatsapp_gateway_url
         if "localhost" in raw_url:
             raw_url = raw_url.replace("localhost", "127.0.0.1")
         self.base_url = raw_url.rstrip("/")
-        self.api_key = api_key or getattr(settings, "whatsapp_api_key", "")
-        self.default_session_id = default_session_id or getattr(settings, "whatsapp_session_id", "extrahand-dispatch")
-        self.simulated = getattr(settings, "whatsapp_simulated", True)
-        self.webhook_url = getattr(settings, "whatsapp_webhook_url", "http://localhost:8000/api/whatsapp/webhook")
+        self.api_key = api_key or settings.whatsapp_api_key
+        self.default_session_id = default_session_id or settings.whatsapp_session_id
+        self.simulated = settings.whatsapp_simulated
+        self.webhook_url = settings.whatsapp_webhook_url
         self._session_ids: Dict[str, str] = {}
         self._webhook_registered: set[str] = set()
 

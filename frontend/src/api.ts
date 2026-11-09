@@ -2,7 +2,7 @@
  * ExtraHand Intelligence Platform - API Gateway Client
  * 
  * Configured via frontend/.env:
- * - VITE_API_BASE_URL: Main FastAPI backend URL (e.g. http://127.0.0.1:8000)
+ * - VITE_API_BASE_URL: Main FastAPI backend URL (e.g. http://127.0.0.1:8050)
  * - VITE_CALLING_SERVICE_URL: Service 1 (Voice Calling & Telephony)
  * - VITE_WHATSAPP_SERVICE_URL: Service 2 (WhatsApp Dispatch)
  * - VITE_MARKETING_SERVICE_URL: Service 3 (Festival & Demand Marketing)
@@ -31,8 +31,8 @@ function resolveUrl(path: string, serviceUrl?: string): string {
     return path;
   }
   const base = serviceUrl || API_BASE_URL;
-  // If base is empty or points to local dev ports, use relative path for Vite proxy
-  if (!base || base.includes("localhost:8000") || base.includes("127.0.0.1:8000")) {
+  // If base is empty or points to this machine, use a relative path so the Vite proxy handles it
+  if (!base || /^https?:[/][/](localhost|127[.]0[.]0[.]1)(:|[/]|$)/.test(base)) {
     return path.startsWith("/") ? path : `/${path}`;
   }
   const cleanPath = path.startsWith("/") ? path : `/${path}`;
@@ -50,15 +50,16 @@ export async function request<T>(
 ): Promise<T> {
   const url = resolveUrl(path, serviceUrl);
   let res: Response;
+  const isFormData = typeof FormData !== "undefined" && body instanceof FormData;
   try {
     res = await fetch(url, {
       method,
-      headers: body ? { "Content-Type": "application/json" } : undefined,
-      body: body ? JSON.stringify(body) : undefined,
+      headers: body && !isFormData ? { "Content-Type": "application/json" } : undefined,
+      body: isFormData ? (body as FormData) : body ? JSON.stringify(body) : undefined,
     });
   } catch {
     throw new Error(
-      `Cannot reach the server at ${url}. Check that the frontend (npm run dev) and backend (FastAPI port 8000) are running.`
+      `Cannot reach the server at ${url}. Check that the frontend (npm run dev) and backend (FastAPI port 8050) are running.`
     );
   }
 

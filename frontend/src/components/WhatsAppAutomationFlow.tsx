@@ -7,14 +7,19 @@ import {
   Send,
   Ticket,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { api } from "../api";
 import { AnimatedNumber } from "./motion";
-import type { Helper, Ticket as TicketType, WhatsAppStatus } from "../types";
+import { ChannelActiveButton } from "./WhatsAppChannelToggle";
+import type { Helper, Ticket as TicketType, WhatsAppFlow, WhatsAppStatus } from "../types";
 
 export interface WhatsAppAutomationFlowProps {
   tickets?: TicketType[];
   helpers?: Helper[];
   status?: WhatsAppStatus | null;
+  automationActive?: boolean;
+  onToggleAutomation?: () => void;
+  isTogglingChannel?: string | null;
   onSelectFilter?: (filter: "all" | "today" | "eligible" | "sent" | "inprogress" | "failed") => void;
   onRefresh?: () => void;
   compact?: boolean;
@@ -30,79 +35,49 @@ export interface WhatsAppAutomationFlowProps {
  */
 export function WhatsAppAutomationFlow({
   tickets,
-  helpers,
   status,
+  automationActive = true,
+  onToggleAutomation,
+  isTogglingChannel,
   onSelectFilter,
 }: WhatsAppAutomationFlowProps) {
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
 
-  // Compute live dynamic metrics
+  // Today's real numbers from the backend (real-customer orders live from ExtraHand + the WhatsApp dispatch log)
+  const [flow, setFlow] = useState<WhatsAppFlow | null>(null);
+  useEffect(() => {
+    let stop = false;
+    const load = () =>
+      api.whatsapp
+        .flow()
+        .then((f) => !stop && setFlow(f))
+        .catch(() => undefined);
+    load();
+    const timer = setInterval(load, 60_000);
+    return () => {
+      stop = true;
+      clearInterval(timer);
+    };
+  }, [tickets, status]);
+
   const metrics = useMemo(() => {
-    const list = tickets ?? [];
-    const helperList = helpers ?? [];
-
-    const now = new Date();
-    const isToday = (dateStr?: string | null) => {
-      if (!dateStr) return false;
-      const d = new Date(dateStr);
-      if (isNaN(d.getTime())) return false;
-      return (
-        d.getDate() === now.getDate() &&
-        d.getMonth() === now.getMonth() &&
-        d.getFullYear() === now.getFullYear()
-      );
-    };
-
-    // 1. Today count & total tasks count
-    const todayTickets = list.filter((t) => isToday(t.scheduled_at) || isToday(t.created_at));
-    const tasksTodayCount = todayTickets.length > 0 ? todayTickets.length : Math.min(list.length, 12);
-    const totalVolume = list.length > 0 ? list.length : 555;
-
-    // 2. Based on location and service (eligible helper pool)
-    const activeCategories = new Set(list.map((t) => t.category?.toLowerCase()).filter(Boolean));
-    const eligibleHelpers = helperList.filter((h) => {
-      if (!h.status || h.status === "active" || h.status === "verified") return true;
-      const cats = (h.categories || []).map((c) => c.toLowerCase());
-      const skills = (h.skills || []).map((s) => s.toLowerCase());
-      return [...cats, ...skills].some((k) => activeCategories.has(k));
-    });
-    const eligibleCount = eligibleHelpers.length > 0 ? eligibleHelpers.length : Math.max(38, helperList.length);
-
-    // 3. Sent WhatsApp messages
-    const messagesTodayCount = status?.messages_today ?? 18;
-    const totalSentCount = status?.messages_total ?? 142;
-    const deliveryRate = status?.delivery_rate ?? "99.8%";
-
-    // 4. In progress tasks / pending acceptance
-    const inProgressTickets = list.filter((t) =>
-      t.status === "in_progress" ||
-      t.status === "assigned" ||
-      t.dispatch_status === "dispatching"
-    );
-    const inProgressCount = inProgressTickets.length > 0 ? inProgressTickets.length : 5;
-
-    // 5. Failed / Unable to send tasks (undelivered / opted-out / bounce)
-    const failedTickets = list.filter((t) =>
-      t.dispatch_status === "escalated" ||
-      t.status === "failed" ||
-      t.status === "cancelled" ||
-      (t.description && t.description.toLowerCase().includes("failed"))
-    );
-    const failedCount = failedTickets.length > 0
-      ? failedTickets.length
-      : (status ? Math.max(1, Math.round((status.messages_today ?? 18) * 0.05)) : 2);
-
+    const n = (v?: number) => (v ?? 0).toLocaleString("en-IN");
     return {
-      tasksTodayCount,
-      totalVolume,
-      eligibleCount,
-      messagesTodayCount,
-      totalSentCount,
-      deliveryRate,
-      inProgressCount,
-      failedCount,
+      tasksTodayCount: flow?.tasks_today ?? 0,
+      totalVolume: n(flow?.total_orders),
+      eligibleCount: flow?.eligible_helpers ?? 0,
+      openToday: flow?.open_today ?? 0,
+      helperPool: n(flow?.helper_pool),
+      messagesTodayCount: flow?.sent_today ?? 0,
+      totalSentCount: flow?.sent_total ?? 0,
+      simulatedTotal: n(flow?.simulated_total),
+      deliveryRate: "Not tracked yet",
+      inProgressCount: flow?.in_progress_today ?? 0,
+      failedCount: flow?.failed_today ?? 0,
+      failedTotal: n(flow?.failed_total),
+      sourceLabel: !flow ? "Loading…" : flow.source === "live" ? "Live ExtraHand · real customers" : "Local copy (ExtraHand offline)",
     };
-  }, [tickets, helpers, status]);
+  }, [flow]);
 
   const handleNodeClick = (nodeKey: string, filterType: "all" | "today" | "eligible" | "sent" | "inprogress" | "failed") => {
     setSelectedNode(nodeKey);
@@ -132,16 +107,67 @@ export function WhatsAppAutomationFlow({
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+          {/* Individual Active / Deactivated Button for Dispatch Dashboard */}
+          <ChannelActiveButton
+            channelName="Automation"
+            isActive={automationActive}
+            onToggle={onToggleAutomation}
+            isLoading={isTogglingChannel === "automation"}
+          />
+
           <span className="pill tone-success" style={{ fontSize: "12px", padding: "4px 10px", display: "inline-flex", alignItems: "center", gap: "6px" }}>
             <span className="live-pulse-dot" style={{ width: "7px", height: "7px", borderRadius: "50%", background: "#10b981", boxShadow: "0 0 6px #10b981" }} />
-            <span>Meta Cloud API · Active</span>
-          </span>
-          <span className="pill" style={{ fontSize: "12px", padding: "4px 10px", background: "var(--surface-2)", border: "1px solid var(--border)", display: "inline-flex", alignItems: "center", gap: "6px" }}>
-            <span style={{ width: "7px", height: "7px", borderRadius: "50%", background: "#0ea5e9" }} />
-            <span>Autonomous Pipeline</span>
+            <span>Meta Cloud API</span>
           </span>
         </div>
       </div>
+
+      {/* Warning banner when WhatsApp Automation is Inactive */}
+      {!automationActive && (
+        <div
+          style={{
+            marginBottom: "0.85rem",
+            padding: "9px 14px",
+            borderRadius: "10px",
+            background: "rgba(239, 68, 68, 0.08)",
+            border: "1.5px solid rgba(239, 68, 68, 0.35)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+            gap: "10px",
+            color: "#991b1b",
+            fontSize: "12.5px",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <AlertCircle size={16} style={{ color: "#ef4444", flexShrink: 0 }} />
+            <span>
+              <strong>WhatsApp Automation is INACTIVE:</strong> Automated task dispatches and candidate broadcasts are paused and cannot send messages. Bulk Messaging can still send if Active.
+              <strong>WhatsApp Automation is DEACTIVATED:</strong> Automated task dispatches and candidate broadcasts are paused and cannot send messages. Click the red <strong>Deactivated</strong> button at top right to activate.
+            </span>
+          </div>
+          {onToggleAutomation && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={onToggleAutomation}
+              style={{
+                fontSize: "11.5px",
+                padding: "3px 10px",
+                background: "#ef4444",
+                color: "#ffffff",
+                border: "none",
+                borderRadius: "6px",
+                fontWeight: 700,
+                cursor: "pointer",
+              }}
+            >
+              Turn On Automation
+            </button>
+          )}
+        </div>
+      )}
 
       {/* 2. ANIMATED FLOW DIAGRAM CANVAS */}
       <div className="flow-diagram-wrapper">
@@ -281,9 +307,9 @@ export function WhatsAppAutomationFlow({
               </div>
               <div className="node-name-primary">Today's Tasks &amp; Intake</div>
               <div className="node-desc-sub">
-                Total Volume: <b>{metrics.totalVolume}</b> Orders
+                All time: <b>{metrics.totalVolume}</b> customer orders
               </div>
-              <div className="node-footer-hint">Live ExtraHand Ingest</div>
+              <div className="node-footer-hint">{metrics.sourceLabel}</div>
             </motion.div>
 
             {/* STEP 2: LOCATION & SKILL MATCH */}
@@ -305,33 +331,59 @@ export function WhatsAppAutomationFlow({
               </div>
               <div className="node-name-primary">Location &amp; Skill Match</div>
               <div className="node-desc-sub">
-                Radius: <b>10 km</b> · Proximity Match
+                For <b>{metrics.openToday}</b> open order{metrics.openToday === 1 ? "" : "s"} · {metrics.helperPool} helpers available
               </div>
-              <div className="node-footer-hint teal">Eligible Verified Helpers</div>
+              <div className="node-footer-hint teal">Approved helpers matching the service</div>
             </motion.div>
 
             {/* STEP 3: SENT ALERTS (WHATSAPP BROADCAST OUTREACH) */}
             <motion.div
               className={`flow-node-card node-sent ${selectedNode === "sended" ? "selected" : ""}`}
-              style={{ left: "585px", top: "65px", width: "215px" }}
+              style={{
+                left: "585px",
+                top: "65px",
+                width: "215px",
+                border: automationActive ? undefined : "1.5px dashed rgba(239, 68, 68, 0.5)",
+                opacity: automationActive ? 1 : 0.88,
+              }}
               whileHover={{ scale: 1.03, y: -2 }}
               onClick={() => handleNodeClick("sended", "sent")}
-              title="Click to view sent WhatsApp alert broadcasts"
+              title={
+                automationActive
+                  ? "Click to view sent WhatsApp alert broadcasts"
+                  : "Automation is Inactive - dispatches paused"
+              }
             >
               <div className="flow-node-head">
-                <div className="node-icon-pill icon-green">
+                <div
+                  className={`node-icon-pill ${automationActive ? "icon-green" : "icon-amber"}`}
+                  style={!automationActive ? { background: "rgba(239, 68, 68, 0.12)", color: "#ef4444" } : undefined}
+                >
                   <Send size={15} />
                 </div>
-                <span className="node-badge-tag green">WHATSAPP OUTREACH</span>
+                <span
+                  className={`node-badge-tag ${automationActive ? "green" : "amber"}`}
+                  style={
+                    !automationActive
+                      ? { background: "rgba(239, 68, 68, 0.15)", color: "#dc2626", borderColor: "rgba(239, 68, 68, 0.3)" }
+                      : undefined
+                  }
+                >
+                  {automationActive ? "WHATSAPP OUTREACH" : "OUTREACH PAUSED"}
+                </span>
               </div>
-              <div className="node-num-val green">
+              <div className={`node-num-val ${automationActive ? "green" : "amber"}`} style={!automationActive ? { color: "#dc2626" } : undefined}>
                 <AnimatedNumber value={metrics.messagesTodayCount} />
               </div>
-              <div className="node-name-primary">Sent Alerts (WhatsApp)</div>
-              <div className="node-desc-sub">
-                1-Click Task Acceptance Alert
+              <div className="node-name-primary">
+                {automationActive ? "Sent Today (WhatsApp)" : "Alerts (Automation Paused)"}
               </div>
-              <div className="node-footer-hint green">Dispatched to Helpers</div>
+              <div className="node-desc-sub">
+                {automationActive ? "1-Click Task Acceptance Alert" : "🚫 Inactive — Cannot dispatch"}
+              </div>
+              <div className={`node-footer-hint ${automationActive ? "green" : "amber"}`} style={!automationActive ? { color: "#dc2626" } : undefined}>
+                {automationActive ? "Delivered through Meta (not simulated)" : "Messaging Inactive"}
+              </div>
             </motion.div>
 
             {/* STEP 4: IN PROGRESS & AWAITING */}
@@ -351,11 +403,11 @@ export function WhatsAppAutomationFlow({
               <div className="node-num-val amber">
                 <AnimatedNumber value={metrics.inProgressCount} />
               </div>
-              <div className="node-name-primary">In Progress &amp; Awaiting</div>
+              <div className="node-name-primary">In Progress Today</div>
               <div className="node-desc-sub">
-                Awaiting Helper Accept
+                Today's orders with a helper assigned
               </div>
-              <div className="node-footer-hint amber">Read Receipts &amp; Responses</div>
+              <div className="node-footer-hint amber">Live ExtraHand status</div>
             </motion.div>
 
             {/* STEP 5: SENT TODAY / TOTAL SENT (DELIVERY KPI METRICS) */}
@@ -389,9 +441,9 @@ export function WhatsAppAutomationFlow({
                 Sent Today / Total Sent
               </div>
               <div className="node-desc-sub">
-                Delivery Success: <b>{metrics.deliveryRate}</b>
+                Real sends · {metrics.simulatedTotal} more were only simulated
               </div>
-              <div className="node-footer-hint green">100% Meta Cloud Delivery</div>
+              <div className="node-footer-hint green">Delivery receipts: {metrics.deliveryRate}</div>
             </motion.div>
 
             {/* STEP 6: FAILED / UNABLE TO SEND (BOUNCE / ERROR RETRY) */}
@@ -411,9 +463,9 @@ export function WhatsAppAutomationFlow({
               <div className="node-num-val rose">
                 <AnimatedNumber value={metrics.failedCount} />
               </div>
-              <div className="node-name-primary" style={{ color: "#b91c1c" }}>Failed / Unable to Send</div>
+              <div className="node-name-primary" style={{ color: "#b91c1c" }}>Failed to Send Today</div>
               <div className="node-desc-sub">
-                Invalid Phone · Opted Out · Timeout
+                {metrics.failedTotal} failed in total · invalid phone, opt-out, error
               </div>
               <div className="node-footer-hint rose">Auto-Escalate to Voice Calling</div>
             </motion.div>

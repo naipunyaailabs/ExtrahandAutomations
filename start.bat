@@ -1,25 +1,29 @@
 @echo off
-title ExtraHand Intelligence Platform Runner
+title Intelligence Platform Runner
+cd /d "%~dp0"
+
+rem Ports can be overridden with environment variables before running this script.
+if not defined BACKEND_PORT set BACKEND_PORT=8050
+if not defined FRONTEND_PORT set FRONTEND_PORT=5180
+
 echo ========================================================================
-echo   Starting ExtraHand Intelligence Platform...
+echo   Starting Intelligence Platform...
 echo ========================================================================
 echo.
 
-cd /d "%~dp0"
+echo [1/2] Launching Backend Server on http://localhost:%BACKEND_PORT% ...
+start "Backend (Port %BACKEND_PORT%)" cmd /k "cd /d "%~dp0backend" && set "PORT=%BACKEND_PORT%" && .venv\Scripts\activate.bat && python run.py"
 
-echo [1/2] Launching Backend Server on http://localhost:8000 ...
-start "ExtraHand Backend (Port 8000)" cmd /k "cd /d "%~dp0backend" && .venv\Scripts\activate.bat && python run.py"
-
-echo [2/2] Launching Frontend UI on http://localhost:5173 ...
-start "ExtraHand Frontend (Port 5173)" cmd /k "cd /d "%~dp0frontend" && npm run dev"
+echo [2/2] Launching Frontend UI on http://localhost:%FRONTEND_PORT% ...
+start "Frontend (Port %FRONTEND_PORT%)" cmd /k "cd /d "%~dp0frontend" && set "VITE_DEV_PORT=%FRONTEND_PORT%" && set "VITE_API_BASE_URL=http://127.0.0.1:%BACKEND_PORT%" && npm run dev"
 
 echo.
 echo ========================================================================
 echo   Both services are launching in separate windows!
-echo   - Backend API : http://localhost:8000
-echo   - Web UI      : http://localhost:5173
+echo   - Backend API : http://localhost:%BACKEND_PORT%
+echo   - Web UI      : http://localhost:%FRONTEND_PORT%
 echo ========================================================================
 echo.
 timeout /t 5 >nul
-start http://localhost:5173
+start http://localhost:%FRONTEND_PORT%
 exit /b 0
