@@ -9,7 +9,7 @@
  * - Audit-ready CSV export streams
  */
 
-import type { CustomerCategories, EngagementDashboardSummary, SilverCustomerPage } from "../types";
+import type { CustomerCategories, EngagementDashboardSummary, EngagementRegions, SilverCustomerPage } from "../types";
 
 export interface OperationalPerformanceKPIs {
   total_volume: number;
@@ -30,6 +30,8 @@ export function createEngagementService(
 
   return {
     dashboard: () => get<EngagementDashboardSummary>("/api/engagement/dashboard"),
+    /** Customers and helpers by state and city ({loading: true} while the first read is running). */
+    regions: () => get<EngagementRegions>("/api/engagement/regions"),
     /** Category module: real customers of a month (YYYY-MM) in Diamond / Gold / Platinum / Silver. */
     categories: (month?: string) =>
       get<CustomerCategories>(`/api/engagement/categories${month ? `?month=${month}` : ""}`),

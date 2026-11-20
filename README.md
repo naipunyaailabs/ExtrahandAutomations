@@ -71,7 +71,7 @@ Data that changes over time is kept in JSON files instead of code:
 | File | Contents |
 |---|---|
 | `backend/marketing/data/regions.json` | All-India and the monitored cities (Advertisement > States & Cities). New entries are added to the database on start. Festivals are registered by hand from each calendar; there is no web search. |
-| `backend/whatsapp/data/city_areas.json` | Area names used to match helpers to a task when GPS coordinates are missing. |
+| `backend/app/services/places.py` | Matches helpers to a task when GPS is missing: places (PIN code, city, address areas, work areas) are learned from ExtraHand's synced tasks and helpers, so new cities need no setup. |
 
 ## Going live
 

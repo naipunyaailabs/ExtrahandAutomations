@@ -1,11 +1,19 @@
+# =============================================================================
+# Git Ignore Rules for ExtraHand Intelligence Platform
+# =============================================================================
+
 # Environment & Secrets
 .env
 backend/.env
+frontend/.env
+voice-handoff/.env
 *.env
 *.env.*
+!*.env.example
 
 # Python
 backend/.venv/
+voice-handoff/.venv/
 .venv/
 venv/
 ENV/
@@ -15,7 +23,7 @@ __pycache__/
 *.so
 .pytest_cache/
 
-# Databases
+# Databases & Backups
 backend/database/*.db
 backend/database/*.db-*
 *.sqlite3
@@ -35,6 +43,17 @@ dist/
 *.swo
 .DS_Store
 Thumbs.db
+
+# Runtime Logs & Binaries
+*.log
+backend/*.log
+backend/cloudflared.exe
+*.exe
+
+# Local Generated Audio & Banner Caches (Azure Blob Storage is used instead)
+backend/database/ivr_audio/*.wav
+backend/database/whatsapp_banners/*
+backend/database/posters/*
 
 # OpenWA WhatsApp gateway (separate project, cloned locally)
 openwa-gateway/

@@ -1,29 +1,64 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
-/** Loads data and refreshes it every `intervalMs` while the tab is visible. */
+/**
+ * Loads data and refreshes it every `intervalMs` while the tab is visible.
+ * - A tick is skipped while the previous request is still running, so slow replies never pile up.
+ * - When the reply is identical to the last one the state is left alone, so big tables do not re-render.
+ */
 export function usePoll<T>(load: () => Promise<T>, intervalMs = 3000, deps: unknown[] = []) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const loadRef = useRef(load);
   loadRef.current = load;
+  const inFlight = useRef(false);
+  const lastJson = useRef<string | null>(null);
+  const generation = useRef(0);
 
+  const apply = useCallback((next: T, gen: number) => {
+    if (gen !== generation.current) return; // a reply for old parameters (deps changed meanwhile)
+    let json: string | null = null;
+    try { json = JSON.stringify(next); } catch { /* not serialisable: always update */ }
+    if (json !== null && json === lastJson.current) return;
+    lastJson.current = json;
+    setData(next);
+  }, []);
+
+  /** Manual refresh (after an action): always runs. */
   const refresh = useCallback(async () => {
+    const gen = generation.current;
     try {
-      setData(await loadRef.current());
+      apply(await loadRef.current(), gen);
       setError(null);
     } catch (e) {
       setError((e as Error).message);
     }
-  }, []);
+  }, [apply]);
+
+  /** Timer tick: skipped while a request is still running. */
+  const tick = useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    try {
+      await refresh();
+    } finally {
+      inFlight.current = false;
+    }
+  }, [refresh]);
 
   useEffect(() => {
-    refresh();
+    generation.current += 1;
+    inFlight.current = false;
+    tick();
     const id = setInterval(() => {
-      if (document.visibilityState === "visible") refresh();
+      if (document.visibilityState === "visible") tick();
     }, intervalMs);
-    return () => clearInterval(id);
+    // coming back to the tab: refresh at once instead of waiting for the next tick
+    const onVisible = () => { if (document.visibilityState === "visible") tick(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { clearInterval(id); document.removeEventListener("visibilitychange", onVisible); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refresh, intervalMs, ...deps]);
+  }, [tick, intervalMs, ...deps]);
 
   return { data, error, refresh };
 }
@@ -45,4 +80,54 @@ export function useAction() {
     }
   }, []);
   return { busy, error, run, setError };
+}
+
+/**
+ * A piece of page state kept in the URL (?key=value), so a reload shows the same view and the browser's
+ * Back button returns to the previous view.
+ *  - `push: true`  for navigation (opening a detail, switching a section): each change is a Back step.
+ *  - `push: false` (default) for filters and searches: the URL updates in place, without extra Back steps.
+ * The default value is left out of the URL to keep it clean.
+ */
+export function useUrlState<T extends string>(
+  key: string,
+  initial: T,
+  { push = false }: { push?: boolean } = {},
+): [T, (value: T) => void, () => void] {
+  const [params] = useSearchParams();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const value = (params.get(key) ?? initial) as T;
+  const set = useCallback(
+    (next: T) => {
+      // Read the live URL (not the render-time params) so several setters in one click all apply
+      const p = new URLSearchParams(window.location.search);
+      if (next === initial || next === "" || next == null) p.delete(key);
+      else p.set(key, String(next));
+      const search = p.toString();
+      if (search === window.location.search.replace(/^\?/, "")) return;
+      navigate(
+        { pathname: window.location.pathname, search: search ? `?${search}` : "", hash: window.location.hash },
+        // Mark entries this page pushed, so back() knows the previous entry is this page's earlier view
+        { replace: !push, state: push ? { urlStateFrom: key } : window.history.state?.usr ?? null },
+      );
+    },
+    [key, initial, push, navigate],
+  );
+  /** In-page "Back": one history step when this view was opened from the page, else reset to the default view. */
+  const back = useCallback(() => {
+    if ((location.state as { urlStateFrom?: string } | null)?.urlStateFrom === key) navigate(-1);
+    else set(initial);
+  }, [location.state, key, navigate, set, initial]);
+  return [value, set, back];
+}
+
+/** One step back in the browser history; when the page was opened directly (reload / new tab) go to `fallback`. */
+export function useGoBack(fallback: string) {
+  const navigate = useNavigate();
+  return useCallback(() => {
+    const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0;
+    if (idx > 0) navigate(-1);
+    else navigate(fallback, { replace: true });
+  }, [navigate, fallback]);
 }

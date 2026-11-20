@@ -4,7 +4,7 @@ All datetimes are stored as naive UTC (see ``utcnow``)."""
 
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -90,6 +90,12 @@ class Ticket(Base):
     assignee_phone: Mapped[str | None] = mapped_column(String(32))
     # True when the assignment came from our call and could not be pushed to ExtraHand
     assignment_local_only: Mapped[bool] = mapped_column(default=False)
+    # Who assigned the helper: extrahand | call (accepted on our IVR call) | whatsapp (replied YES)
+    assigned_via: Mapped[str | None] = mapped_column(String(20))
+    assigned_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # Our assignment written to ExtraHand: pending | ok | failed (None = assigned on ExtraHand itself)
+    extrahand_push: Mapped[str | None] = mapped_column(String(10))
+    extrahand_push_error: Mapped[str | None] = mapped_column(String(300))
     # Helper still assigned on ExtraHand but dropped here (e.g. said they cannot attend);
     # sync ignores that remote assignment until it changes
     ignored_remote_assignee_id: Mapped[str | None] = mapped_column(String(64))
@@ -150,6 +156,8 @@ class CallAttempt(Base):
     duration_seconds: Mapped[int] = mapped_column(Integer, default=0)
     recording_url: Mapped[str | None] = mapped_column(String(500))
     error: Mapped[str | None] = mapped_column(String(500))
+    handoff_json: Mapped[str | None] = mapped_column(Text)  # what the voice agent recorded after a hand-off
+    timeline: Mapped[str | None] = mapped_column(Text)  # JSON list of {t, event, detail}: what happened, in order
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     answered_at: Mapped[datetime | None] = mapped_column(DateTime)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime)
@@ -166,6 +174,7 @@ class FollowUp(Base):
     helper_name: Mapped[str | None] = mapped_column(String(200))
     phone: Mapped[str | None] = mapped_column(String(32))
     offset_minutes: Mapped[int] = mapped_column(Integer)
+    retry_of: Mapped[int | None] = mapped_column(ForeignKey("followups.id"))  # set on a retry: the reminder it repeats
     due_at: Mapped[datetime] = mapped_column(DateTime, index=True)
     # scheduled | calling | done | missed | cancelled
     status: Mapped[str] = mapped_column(String(20), default="scheduled", index=True)
@@ -264,3 +273,229 @@ class AppSetting(Base):
     key: Mapped[str] = mapped_column(String(80), primary_key=True)
     value: Mapped[str] = mapped_column(Text)
 
+
+class BulkCallCampaign(Base):
+    """Customized bulk calling campaign with its own independent active/inactive state."""
+
+    __tablename__ = "bulk_call_campaigns"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(String(200))
+    script: Mapped[str] = mapped_column(Text)
+    language: Mapped[str] = mapped_column(String(20), default="te-IN")
+    status: Mapped[str] = mapped_column(String(20), default="inactive")  # inactive | active | paused | completed | cancelled
+    total_contacts: Mapped[int] = mapped_column(Integer, default=0)
+    completed_calls: Mapped[int] = mapped_column(Integer, default=0)
+    failed_calls: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+    items: Mapped[list["BulkCallItem"]] = relationship(
+        "BulkCallItem", back_populates="campaign", cascade="all, delete-orphan", order_by="BulkCallItem.id"
+    )
+
+
+class BulkCallItem(Base):
+    """One recipient in a bulk calling campaign dialed sequentially one by one."""
+
+    __tablename__ = "bulk_call_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    campaign_id: Mapped[int] = mapped_column(ForeignKey("bulk_call_campaigns.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str | None] = mapped_column(String(200))
+    phone: Mapped[str] = mapped_column(String(32), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | calling | completed | failed | busy | no_answer
+    call_id: Mapped[str | None] = mapped_column(String(100))
+    duration_seconds: Mapped[int | None] = mapped_column(Integer)
+    error_message: Mapped[str | None] = mapped_column(String(500))
+    called_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    campaign: Mapped["BulkCallCampaign"] = relationship("BulkCallCampaign", back_populates="items")
+
+
+
+
+class CompetitorPrice(Base):
+    """A competitor's price for one of our services, typed in by the team (Competitive Pricing page)."""
+
+    __tablename__ = "competitor_prices"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    service: Mapped[str] = mapped_column(String(200), index=True)  # our service name, e.g. "AC Repair"
+    competitor: Mapped[str] = mapped_column(String(120), index=True)  # e.g. "Urban Company"
+    price: Mapped[float] = mapped_column(Float)
+    notes: Mapped[str | None] = mapped_column(String(500))
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class UsageEvent(Base):
+    """One metered use of a paid service (e.g. a Sarvam text-to-speech request), for the Commercials page."""
+
+    __tablename__ = "usage_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    service: Mapped[str] = mapped_column(String(30), index=True)  # sarvam_tts
+    source: Mapped[str] = mapped_column(String(20), default="ivr")  # ivr | bulk | preview | check
+    units: Mapped[int] = mapped_column(Integer, default=0)  # characters for TTS
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class WhatsAppCampaign(Base):
+    """One bulk WhatsApp send (Bulk Msgs page), for the Bulk commercials page."""
+
+    __tablename__ = "whatsapp_campaigns"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    message_preview: Mapped[str | None] = mapped_column(String(300))
+    total: Mapped[int] = mapped_column(Integer, default=0)
+    sent: Mapped[int] = mapped_column(Integer, default=0)
+    failed: Mapped[int] = mapped_column(Integer, default=0)
+    simulated: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class WhatsAppMessage(Base):
+    """Every WhatsApp message sent or received, with Meta's delivery and billing reports (status webhooks)."""
+
+    __tablename__ = "whatsapp_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    direction: Mapped[str] = mapped_column(String(4), default="out")  # out | in
+    source: Mapped[str] = mapped_column(String(20), default="automation", index=True)  # automation | bulk | manual
+    purpose: Mapped[str] = mapped_column(String(30), default="other")  # work_order | broadcast | reminder | reply | bulk ...
+    kind: Mapped[str] = mapped_column(String(10), default="text")  # text | template
+    template: Mapped[str | None] = mapped_column(String(100))
+    body: Mapped[str | None] = mapped_column(Text)  # the text the recipient saw (template filled in); None for old rows
+    phone: Mapped[str | None] = mapped_column(String(32), index=True)
+    ticket_id: Mapped[str | None] = mapped_column(String(64))
+    campaign_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    provider_message_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    # sent | failed | simulated, then from Meta: delivered | read | failed
+    status: Mapped[str] = mapped_column(String(12), default="sent", index=True)
+    error_code: Mapped[str | None] = mapped_column(String(20))
+    error: Mapped[str | None] = mapped_column(String(300))
+    # From Meta's pricing object; None until Meta reports it
+    billable: Mapped[bool | None] = mapped_column(Boolean)
+    category: Mapped[str | None] = mapped_column(String(20))  # marketing | utility | authentication | service
+    pricing_type: Mapped[str | None] = mapped_column(String(30))  # regular | free_customer_service | free_entry_point
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class WhatsAppWelcome(Base):
+    """One welcome message per newly registered ExtraHand helper or customer (Welcomers)."""
+
+    __tablename__ = "whatsapp_welcomes"
+    __table_args__ = (UniqueConstraint("audience", "user_id", name="uq_welcome_audience_user"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    audience: Mapped[str] = mapped_column(String(10), index=True)  # helper | customer
+    user_id: Mapped[str] = mapped_column(String(64))
+    name: Mapped[str | None] = mapped_column(String(200))
+    phone: Mapped[str | None] = mapped_column(String(32))
+    registered_at: Mapped[datetime | None] = mapped_column(DateTime)
+    template: Mapped[str | None] = mapped_column(String(100))
+    status: Mapped[str] = mapped_column(String(12), default="sent")  # sent | failed | simulated | skipped
+    error: Mapped[str | None] = mapped_column(String(300))
+    provider_message_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class WhatsAppFeedbackRequest(Base):
+    """One WhatsApp feedback form per completed task: sent to the customer, answered inside WhatsApp (Flow)."""
+
+    __tablename__ = "whatsapp_feedback"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ticket_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    task_title: Mapped[str | None] = mapped_column(String(300))
+    category: Mapped[str | None] = mapped_column(String(120))
+    city: Mapped[str | None] = mapped_column(String(100))
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime)
+    customer_name: Mapped[str | None] = mapped_column(String(200))
+    customer_phone: Mapped[str | None] = mapped_column(String(32))
+    helper_id: Mapped[str | None] = mapped_column(String(64))
+    helper_name: Mapped[str | None] = mapped_column(String(200))
+    # sending | sent | answered | failed | no_phone | skipped (completed before activation / while off)
+    status: Mapped[str] = mapped_column(String(12), default="sending", index=True)
+    flow_token: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
+    provider_message_id: Mapped[str | None] = mapped_column(String(128))
+    error: Mapped[str | None] = mapped_column(String(300))
+    # Answers (1-5 stars) and the customer's note
+    work_rating: Mapped[int | None] = mapped_column(Integer)
+    behaviour_rating: Mapped[int | None] = mapped_column(Integer)
+    on_time_rating: Mapped[int | None] = mapped_column(Integer)
+    comment: Mapped[str | None] = mapped_column(Text)
+    # The customer's reply exactly as Meta delivered it (webhook message id + the form's raw response_json)
+    reply_message_id: Mapped[str | None] = mapped_column(String(128))
+    reply_raw: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime)
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class SeedContact(Base):
+    """Task-Seeding Agent (Advertisement module): one row per newly registered customer it looked at.
+
+    Holds the suggestion it chose, the WhatsApp message, the optional voice call, link clicks and the first
+    booking (conversion). One row per customer (user_id is unique), so nobody is contacted twice."""
+
+    __tablename__ = "task_seed_contacts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), unique=True)  # ExtraHand profile _id (= Ticket.customer_id)
+    name: Mapped[str | None] = mapped_column(String(200))
+    phone: Mapped[str | None] = mapped_column(String(32), index=True)
+    city: Mapped[str | None] = mapped_column(String(120))
+    state: Mapped[str | None] = mapped_column(String(120))
+    lat: Mapped[float | None] = mapped_column(Float)
+    lng: Mapped[float | None] = mapped_column(Float)
+    registered_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    language: Mapped[str | None] = mapped_column(String(5))  # te | hi | en (from the customer's state)
+    # suggestion
+    service: Mapped[str | None] = mapped_column(String(30))  # the main one (Book Now opens its category)
+    services: Mapped[str | None] = mapped_column(String(200))  # every service in the message, comma separated
+    reason: Mapped[str | None] = mapped_column(String(12))  # festival | summer | regular
+    reason_text: Mapped[str | None] = mapped_column(String(300))
+    event_title: Mapped[str | None] = mapped_column(String(200))
+    promo_code: Mapped[str | None] = mapped_column(String(40))
+    token: Mapped[str] = mapped_column(String(40), unique=True)  # Book Now link / call webhooks
+    # pending | sending | messaged | called | failed | skipped | opted_out | converted
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    skip_reason: Mapped[str | None] = mapped_column(String(40))
+    # WhatsApp
+    wa_status: Mapped[str | None] = mapped_column(String(16))
+    wa_language: Mapped[str | None] = mapped_column(String(10))
+    wa_message_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    wa_error: Mapped[str | None] = mapped_column(String(300))
+    wa_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    wa_sent_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # voice call
+    call_status: Mapped[str | None] = mapped_column(String(16))
+    call_id: Mapped[str | None] = mapped_column(String(128))
+    call_error: Mapped[str | None] = mapped_column(String(300))
+    call_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    call_at: Mapped[datetime | None] = mapped_column(DateTime)
+    call_duration: Mapped[int | None] = mapped_column(Integer)
+    # Book Now clicks and the first booking
+    clicks: Mapped[int] = mapped_column(Integer, default=0)
+    first_click_at: Mapped[datetime | None] = mapped_column(DateTime)
+    converted_at: Mapped[datetime | None] = mapped_column(DateTime)
+    converted_ticket_id: Mapped[str | None] = mapped_column(String(64))
+    converted_category: Mapped[str | None] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class SeedOptOut(Base):
+    """A phone number that replied STOP: never messaged or called by the Task-Seeding Agent again."""
+
+    __tablename__ = "task_seed_optouts"
+
+    phone: Mapped[str] = mapped_column(String(15), primary_key=True)  # last 10 digits
+    source: Mapped[str] = mapped_column(String(20), default="whatsapp")  # whatsapp | admin
+    note: Mapped[str | None] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

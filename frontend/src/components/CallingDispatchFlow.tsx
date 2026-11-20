@@ -14,6 +14,8 @@ import { useEffect, useMemo, useState } from "react";
 import { AnimatedNumber } from "./motion";
 import type { Call, CallingFlow, Escalation, Stats, Ticket as TicketType } from "../types";
 import { api } from "../api";
+import { usePoll } from "../hooks";
+import { CallTimingBanner } from "./CallTimingBanner";
 
 export interface CallingDispatchFlowProps {
   tickets?: TicketType[];
@@ -100,6 +102,10 @@ export function CallingDispatchFlow({
     [flow]
   );
 
+  // Calling hours (India time): the agent only places calls inside this window
+  const { data: agentStatus } = usePoll(() => api.callingAgentStatus(), 30000);
+  const hours = agentStatus?.calling_hours;
+
   const handleNodeClick = (nodeKey: string, filterType: any) => {
     setSelectedNode(nodeKey);
     onSelectFilter?.(filterType);
@@ -115,7 +121,42 @@ export function CallingDispatchFlow({
           </div>
           <h3 className="flow-heading">Calling Agent Dispatch</h3>
         </div>
+        {hours && (
+          <div
+            title={hours.open ? "The agent is placing calls now" : "No calls now: job offers, reminders and feedback calls wait until the window opens"}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "8px",
+              padding: "6px 12px",
+              borderRadius: "999px",
+              fontSize: "13px",
+              fontWeight: 600,
+              border: `1px solid ${hours.open ? "rgba(22, 163, 74, 0.35)" : "rgba(217, 119, 6, 0.4)"}`,
+              background: hours.open ? "rgba(22, 163, 74, 0.08)" : "rgba(217, 119, 6, 0.08)",
+              color: "var(--text, #0f172a)",
+              whiteSpace: "nowrap",
+            }}
+          >
+            <Clock size={15} style={{ color: hours.open ? "#16a34a" : "#d97706" }} />
+            <span>Calling hours: {hours.label.replace(" IST", "")}</span>
+            <span
+              style={{
+                fontSize: "11.5px",
+                fontWeight: 700,
+                padding: "1px 8px",
+                borderRadius: "999px",
+                background: hours.open ? "#16a34a" : "#d97706",
+                color: "#fff",
+              }}
+            >
+              {hours.open ? "Open now" : "Closed"}
+            </span>
+          </div>
+        )}
       </div>
+
+      <CallTimingBanner tickets={tickets} />
 
       {/* 2. Aligned SVG & Card Flow Diagram (5-Column Layout with ZERO Overlap) */}
       <div className="flow-diagram-wrapper">

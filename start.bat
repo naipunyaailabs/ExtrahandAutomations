@@ -2,28 +2,42 @@
 title Intelligence Platform Runner
 cd /d "%~dp0"
 
-rem Ports can be overridden with environment variables before running this script.
-if not defined BACKEND_PORT set BACKEND_PORT=8050
-if not defined FRONTEND_PORT set FRONTEND_PORT=5180
+rem One port for everything: the backend serves the dashboard and every API.
+rem The port can be overridden with an environment variable before running this script.
+if not defined BACKEND_PORT set BACKEND_PORT=5074
 
 echo ========================================================================
-echo   Starting Intelligence Platform...
+echo   Starting ExtraHand Intelligence Platform...
 echo ========================================================================
 echo.
 
-echo [1/2] Launching Backend Server on http://localhost:%BACKEND_PORT% ...
-start "Backend (Port %BACKEND_PORT%)" cmd /k "cd /d "%~dp0backend" && set "PORT=%BACKEND_PORT%" && .venv\Scripts\activate.bat && python run.py"
+echo [1/3] Building the dashboard ...
+pushd "%~dp0frontend"
+call npm run build
+if errorlevel 1 (
+  popd
+  echo.
+  echo   The dashboard build failed - see the errors above.
+  pause
+  exit /b 1
+)
+popd
 
-echo [2/2] Launching Frontend UI on http://localhost:%FRONTEND_PORT% ...
-start "Frontend (Port %FRONTEND_PORT%)" cmd /k "cd /d "%~dp0frontend" && set "VITE_DEV_PORT=%FRONTEND_PORT%" && set "VITE_API_BASE_URL=http://127.0.0.1:%BACKEND_PORT%" && npm run dev"
+echo [2/3] Launching the platform on http://localhost:%BACKEND_PORT% ...
+start "ExtraHand Platform (Port %BACKEND_PORT%)" cmd /k "cd /d "%~dp0backend" && set "PORT=%BACKEND_PORT%" && .venv\Scripts\activate.bat && python run.py"
+
+echo [3/3] Launching Telephony Cloudflare Tunnel (Port %BACKEND_PORT% to Public HTTPS) ...
+start "Telephony Tunnel" cmd /k "cd /d "%~dp0backend" && .venv\Scripts\activate.bat && python start_tunnel.py"
 
 echo.
 echo ========================================================================
-echo   Both services are launching in separate windows!
-echo   - Backend API : http://localhost:%BACKEND_PORT%
-echo   - Web UI      : http://localhost:%FRONTEND_PORT%
+echo   Dashboard + API : http://localhost:%BACKEND_PORT%
+echo   Telephony       : Cloudflare Tunnel (auto-syncs PUBLIC_BASE_URL)
+echo.
+echo   Developing the UI with live reload? Run "npm run dev" in frontend
+echo   (port 5180, it forwards /api to %BACKEND_PORT%).
 echo ========================================================================
 echo.
 timeout /t 5 >nul
-start http://localhost:%FRONTEND_PORT%
+start http://localhost:%BACKEND_PORT%
 exit /b 0

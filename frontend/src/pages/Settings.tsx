@@ -150,8 +150,26 @@ export default function Settings() {
             checked={form.auto_dispatch}
             onChange={(v) => setForm({ ...form, auto_dispatch: v })}
           >
-            Start dispatch immediately after each ExtraHand ticket synchronization cycle.
+            Automatically start calling helpers for new tasks (no click needed).
           </Toggle>
+
+          <label className="set-lead">
+            <span>
+              <strong>Start calls &amp; IVR</strong>
+              <small>hours before the task's scheduled time. Tasks with no time are called right away.</small>
+            </span>
+            <span className="set-lead-input">
+              <input
+                type="number"
+                min={0.5}
+                max={168}
+                step={0.5}
+                value={form.dispatch_lead_hours ?? 6}
+                onChange={(e) => setForm({ ...form, dispatch_lead_hours: Number(e.target.value) || 6 })}
+              />
+              <em>hours before</em>
+            </span>
+          </label>
         </div>
       </Card>
 
@@ -392,7 +410,7 @@ export default function Settings() {
         <dl className="fields">
           <Field label="Platform Source">{config.extrahand_mode === "live" ? "Live ExtraHand API (Authorized)" : "Mock ExtraHand Simulation (Demo mode)"}</Field>
           <Field label="Helper Matching">{config.matching_api_configured ? "ExtraHand Task Service matching API" : "Helper Directory + Location Geo-Radius filter"}</Field>
-          <Field label="Assignment Mode">{config.assignment_enabled ? "Authorized Platform API (Automatic Remote Assignment)" : "Local Record / Admin Approval Required"}</Field>
+          <Field label="Assignment Mode">{config.assignment_enabled ? "Authorized Platform API (Automatic Remote Assignment)" : "In this app only (ExtraHand is not updated)"}</Field>
           <Field label="Telephony Engine">{config.telephony_provider === "twilio" ? "Twilio Voice Webhooks" : "Simulator / In-browser Engine"}</Field>
           <Field label="Max Prompt Retries">{config.ivr_max_prompts} times per call</Field>
           <Field label="Background Sync Cycle">every {Math.round(config.sync_interval_seconds / 60)} minutes</Field>

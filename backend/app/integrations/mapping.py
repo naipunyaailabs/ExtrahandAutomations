@@ -13,6 +13,15 @@ from ..config import get_settings
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
+
+def ist_text(dt: "datetime | None", fmt: str = "%d %b, %I:%M %p", default: str = "Flexible") -> str:
+    """A stored time (naive UTC) as India time text, e.g. "18 Nov, 12:00 AM" - what helpers and customers see."""
+    if dt is None:
+        return default
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(IST).strftime(fmt)
+
 TERMINAL_STATUSES = {"completed", "complete", "cancelled", "canceled", "closed", "done", "expired", "rejected"}
 ASSIGNED_STATUSES = {"assigned", "accepted", "in_progress", "inprogress", "ongoing", "started"}
 
@@ -93,14 +102,44 @@ def parse_datetime(date_val: Any, time_val: Any = None) -> datetime | None:
                 continue
     if dt is None:
         return None
-    if time_val and dt.hour == 0 and dt.minute == 0:
-        t = _parse_time(str(time_val))
-        if t:
-            # A date-only value serialized as UTC midnight still means that calendar day locally
-            dt = dt.replace(tzinfo=None, hour=t[0], minute=t[1])
+    t = _parse_time(str(time_val)) if time_val else None
+    if t:
+        # A date-only value: midnight UTC (that calendar day) or midnight IST, which ExtraHand sends as
+        # "2026-11-18T18:30:00Z" for 19 Nov. Either way the separate time field is India time on that day.
+        if dt.tzinfo is None:
+            if dt.hour == 0 and dt.minute == 0:
+                dt = dt.replace(hour=t[0], minute=t[1])
+        else:
+            utc, ist = dt.astimezone(UTC), dt.astimezone(IST)
+            day = None
+            if (ist.hour, ist.minute) == (0, 0):
+                day = ist.date()
+            elif (utc.hour, utc.minute) == (0, 0):
+                day = utc.date()
+            if day is not None:
+                dt = datetime(day.year, day.month, day.day, t[0], t[1], tzinfo=IST)
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=IST)
     return dt.astimezone(UTC).replace(tzinfo=None)
+
+
+def task_schedule_end(raw: dict | None) -> datetime | None:
+    """When the task should finish: the slot end time, else start + estimated duration (naive UTC)."""
+    if not isinstance(raw, dict):
+        return None
+    date_val = pick(raw, "scheduledAt", "scheduledDateTime", "scheduledDate", "schedule.date", "preferredDate", "date")
+    start_val = pick(raw, "scheduledTimeStart", "scheduledTime", "schedule.time")
+    end_val = pick(raw, "scheduledTimeEnd", "schedule.endTime")
+    if not start_val or not _parse_time(str(start_val)):
+        return None  # no real start time: an end time would be a guess
+    start = parse_datetime(date_val, start_val)
+    end = parse_datetime(date_val, end_val) if end_val and _parse_time(str(end_val)) else None
+    if start and end and end > start:
+        return end
+    mins = to_float(raw.get("estimatedDuration"))
+    if start and mins and 0 < mins < 24 * 60:
+        return start + timedelta(minutes=mins)
+    return None
 
 
 def _parse_time(s: str) -> tuple[int, int] | None:
@@ -164,7 +203,8 @@ def normalize_task(t: dict) -> dict:
     sched = parse_datetime(
         pick(t, "scheduledAt", "scheduledDateTime", "scheduledDate", "schedule.date", "schedule.startTime",
              "preferredDate", "date", "dueDate"),
-        pick(t, "scheduledTime", "schedule.time", "timeSlot", "preferredTime", "time"),
+        pick(t, "scheduledTimeStart", "scheduledTime", "schedule.time", "schedule.startTime", "timeSlot",
+             "preferredTime", "time"),
     )
     lat, lng = parse_coords(t)
     customer = pick(t, "customer", "requester", "postedBy", "user", "createdBy")

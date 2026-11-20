@@ -1,102 +1,47 @@
-# Service B: WhatsApp Automation (OpenWA Integration)
+# Service B: WhatsApp Automation (Meta WhatsApp Business Cloud API)
 
-This folder contains the **WhatsApp Automation Service** for ExtraHand, integrated with **OpenWA** (Open Source Self-Hosted WhatsApp API Gateway).
+All WhatsApp messages are sent through Meta's official **WhatsApp Business Cloud API**
+(`meta_client.py`, Graph API `https://graph.facebook.com/{version}/{phone_number_id}/messages`).
+There is no gateway to run and no phone to pair: Meta hosts the sending number.
 
-## 📌 What is OpenWA & Why Use It?
+## Setup
 
-**Repository:** [rmyndharis/OpenWA](https://github.com/rmyndharis/OpenWA)
+1. In Meta Business Settings create a **System User**, give it the WhatsApp app, and generate a
+   **permanent** access token with `whatsapp_business_messaging` and `whatsapp_business_management`.
+   (Tokens from the API Setup page expire after ~24 hours / 60 days.)
+2. Set in `backend/.env`:
 
-OpenWA is a free, 100% open-source, self-hosted WhatsApp API Gateway. Instead of paying per-conversation fees with Meta's official WhatsApp Business Cloud API or third-party providers (like Twilio WhatsApp / Wati / Gupshup), OpenWA turns any regular or business WhatsApp number into a programmable REST API & Webhook gateway.
+   ```env
+   META_WA_PHONE_NUMBER_ID=...      # WhatsApp > API Setup > Phone number ID
+   META_WA_ACCESS_TOKEN=...         # the permanent System User token
+   META_WA_BUSINESS_ACCOUNT_ID=...
+   META_WA_WEBHOOK_VERIFY_TOKEN=... # any long random value
+   META_WA_API_VERSION=v21.0
+   WHATSAPP_SIMULATED=false         # true = test mode, nothing is sent
+   ```
+3. In the Meta app, set the webhook URL to `{PUBLIC_BASE_URL}/api/whatsapp/webhook` with the same
+   verify token, and subscribe to `messages`.
 
-### Key Capabilities of OpenWA:
-1. **Self-Hosted & Zero Subscription Fees**: Runs on your own server or Docker container with full data ownership.
-2. **Dual Engine Support**:
-   - `whatsapp-web.js`: Runs headless Chromium browser. Matches real WhatsApp Web traffic (lower ban risk).
-   - `baileys`: Lightweight multi-device WebSocket connection (low memory ~50MB RAM).
-3. **Full REST API & Webhooks**:
-   - Outbound: Send text messages, media, interactive options, templates.
-   - Inbound: Webhook push events for received messages, read receipts, session disconnects.
-4. **Built-in Web Dashboard**: A modern React UI on port 2785 for scanning QR codes, managing sessions, inspecting queues, and setting API keys.
-5. **Anti-Ban Guardrails**: Built-in human typing simulator (`SIMULATE_TYPING`), delay pacing between messages, and send rate limits.
+`GET /api/whatsapp/status` asks Meta for the sending number, so an expired or wrong token shows as
+`AUTH_FAILED` (with Meta's error) on the dashboard instead of "working".
 
----
+## Files
 
-## 🗂️ Folder Structure (Folder B)
+| File | Purpose |
+|---|---|
+| `meta_client.py` | Meta Cloud API client: text + template sends, live status check |
+| `agent.py` | Matches helpers by location + service and broadcasts task alerts |
+| `service.py` | Dispatch / reminder messages used by the worker |
+| `router.py` | `/api/whatsapp/*` endpoints (status, send, bulk, templates, webhook) |
+| `models.py` | Request / response models |
 
-```
-backend/whatsapp/
-├── openwa_client.py            # Async HTTP Client for OpenWA REST API
-├── service.py                  # ExtraHand Dispatch & Reminder message builder
-├── models.py                   # Pydantic schemas for messages & webhooks
-├── router.py                   # FastAPI Router (/api/whatsapp/*)
-├── docker-compose.openwa.yml   # 1-command Docker Compose for OpenWA gateway
-└── README.md                   # Complete service documentation
-```
+## Endpoints
 
----
-
-## 🚀 How to Run & Connect
-
-### Step 1: Start OpenWA Gateway (via Docker)
-```powershell
-docker compose -f backend/whatsapp/docker-compose.openwa.yml up -d
-```
-The OpenWA Dashboard and API will now be live on `http://localhost:2785`.
-
-#### Without Docker (native Node.js 22.19+)
-```powershell
-git clone https://github.com/rmyndharis/OpenWA.git openwa-gateway   # from the repo root; it is gitignored
-cd openwa-gateway
-copy .env.minimal .env
-# In .env, use your installed Chrome instead of downloading one:
-#   PUPPETEER_EXECUTABLE_PATH=C:/Program Files/Google/Chrome/Application/chrome.exe
-#   AUTO_START_SESSIONS=true
-$env:PUPPETEER_SKIP_DOWNLOAD="true"; npm ci
-npm run dev        # API on http://localhost:2785, dashboard on http://localhost:2886
-```
-On first boot OpenWA writes its admin API key to `openwa-gateway/data/.api-key`.
-
-### Step 2: Point the backend at the gateway
-In `backend/.env`:
-```
-WHATSAPP_SIMULATED=false
-WHATSAPP_API_KEY=<contents of data/.api-key>
-```
-Restart the backend. It creates the `extrahand-dispatch` session in OpenWA on first use, starts it,
-and registers `WHATSAPP_WEBHOOK_URL` so helper replies reach `/api/whatsapp/webhook`.
-
-### Step 3: Link Your WhatsApp Number
-1. In the dashboard, open **WhatsApp Agent > Device & Pairing** and click **Connect WhatsApp**.
-2. Scan the QR code with the admin phone (**Settings > Linked Devices > Link a Device**). The QR refreshes itself while the dialog is open.
-3. Once linked, the dialog closes and the status switches to `WORKING`.
-
-*(Note: In development, if Docker is not running, the Python service automatically runs in simulated mode so you can test endpoints without a real WhatsApp number!)*
-
----
-
-## 📡 FastAPI Endpoints
-
-| Method | Endpoint | Description |
+| Method | Path | What it does |
 |---|---|---|
-| `GET` | `/api/whatsapp/status` | Check OpenWA gateway connection & session state |
-| `GET` | `/api/whatsapp/qr` | Get live companion QR code |
-| `POST` | `/api/whatsapp/start` | Initialize or restart WhatsApp session |
-| `POST` | `/api/whatsapp/send-message` | Send arbitrary text message to any phone number |
-| `POST` | `/api/whatsapp/send-dispatch` | Send structured job dispatch alert to a helper |
-| `POST` | `/api/whatsapp/webhook` | Receives inbound replies (OpenWA webhook target) |
-
----
-
-## 💬 Dispatch & Helper Reply Workflow
-
-1. **Dispatch Alert**: Helper receives job details with task title, address, timing, and payout.
-2. **Helper Replies**:
-   - Replies **1** or **ACCEPT**: System accepts the booking, assigns the helper in SQLite DB, and schedules reminders.
-   - Replies **2** or **REJECT**: System declines the task for this helper and dispatches to the next nearest candidate.
-
----
-
-## ⚠️ Safe Sending Guidelines
-- Use a dedicated SIM card for automation (never personal numbers).
-- Warm up newly registered numbers gradually over the first week.
-- Do not cold-blast unknown contacts. Only message opted-in helpers and customers.
+| `GET` | `/api/whatsapp/status` | Live Meta connection state and real / simulated / failed message counts |
+| `POST` | `/api/whatsapp/send-message` | Send one text message |
+| `POST` | `/api/whatsapp/send-dispatch` | Send a work order to one helper |
+| `POST` | `/api/whatsapp/broadcast-task` | Send a task alert to all matched helpers |
+| `POST` | `/api/whatsapp/send-bulk` | Bulk message to uploaded contacts |
+| `GET/POST` | `/api/whatsapp/webhook` | Meta webhook verification and inbound messages |

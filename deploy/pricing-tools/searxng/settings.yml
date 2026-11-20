@@ -1,0 +1,9 @@
+# Used by the SearXNG container. The secret key comes from SEARXNG_SECRET in the compose file's environment.
+use_default_settings: true
+server:
+  limiter: false          # it is only reachable from the VPS itself
+  image_proxy: false
+search:
+  formats: [html, json]   # the backend asks for json
+  safe_search: 0
+  default_lang: en-IN

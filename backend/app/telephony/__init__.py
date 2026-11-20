@@ -7,6 +7,10 @@ def get_provider() -> TelephonyProvider:
         from .twilio import TwilioProvider
 
         return TwilioProvider()
+    if get_settings().telephony_provider == "vobiz":
+        from .vobiz import VobizProvider
+
+        return VobizProvider()
     from .simulator import SimulatorProvider
 
     return SimulatorProvider()

@@ -1,7 +1,7 @@
 /**
  * Service 2: WhatsApp Dispatch & Meta Cloud Service
  * 
- * Manages official Meta WhatsApp Cloud API broadcasts, QR pairing sessions,
+ * Manages official Meta WhatsApp Cloud API broadcasts,
  * task dispatch messages to helpers, and automated acceptance callbacks.
  */
 
@@ -16,6 +16,24 @@ import type {
   WhatsAppStatus,
   WhatsAppFlow,
   WhatsAppTemplate,
+  WaAutomationReport,
+  WaBulkReport,
+  WaRates,
+  WaSentMessagesPage,
+  WaAudience,
+  WaWelcomerCommercials,
+  WaWelcomerDetail,
+  WaWelcomerHistory,
+  WaWelcomerPeople,
+  WaTaskAlertTemplate,
+  WaFeedbackOverview,
+  WaFeedbackPage,
+  WaFeedbackTab,
+  FbTasksPage,
+  FbTemplateExample,
+  FbCommercials,
+  FbWhen,
+  WaWelcomerState,
 } from "../types";
 
 export function createWhatsAppService(
@@ -27,15 +45,68 @@ export function createWhatsAppService(
 
   return {
     status: () => get<WhatsAppStatus>("/api/whatsapp/status"),
+    commercialsAutomation: () => get<WaAutomationReport>("/api/whatsapp/commercials/automation"),
+    commercialsBulk: () => get<WaBulkReport>("/api/whatsapp/commercials/bulk"),
+    /** Welcomers: welcome template to helpers / customers who register after activation */
+    /** Reviews & Feedback: WhatsApp feedback form after a task is completed */
+    feedbackOverview: () => get<WaFeedbackOverview>("/api/whatsapp/feedback/overview"),
+    feedbackRequests: (tab: WaFeedbackTab, q = "", offset = 0) =>
+      get<WaFeedbackPage>(`/api/whatsapp/feedback/requests?${new URLSearchParams({ tab, q, offset: String(offset) })}`),
+    feedbackTasks: (when: FbWhen, state: string, q = "", offset = 0, fb = "all") =>
+      get<FbTasksPage>(`/api/whatsapp/feedback/tasks?${new URLSearchParams({ when, state, fb, q, offset: String(offset) })}`),
+    feedbackCommercials: () => get<FbCommercials>("/api/whatsapp/feedback/commercials"),
+    feedbackExample: () => get<FbTemplateExample>("/api/whatsapp/feedback/example"),
+    feedbackSetup: () => post<WaFeedbackOverview["setup"]>("/api/whatsapp/feedback/setup"),
+    activateFeedback: () => post<{ active: boolean }>("/api/whatsapp/feedback/activate"),
+    deactivateFeedback: () => post<{ active: boolean }>("/api/whatsapp/feedback/deactivate"),
+    feedbackCheckNow: () => post<{ sent: number }>("/api/whatsapp/feedback/check-now"),
+    feedbackSendNow: (ticketId: string) => post<{ ok: boolean }>(`/api/whatsapp/feedback/send/${encodeURIComponent(ticketId)}`),
+    /** Task alert template (new task -> matching helpers) as shown on the Dispatch dashboard */
+    taskAlertTemplate: (ticketId?: string) =>
+      get<WaTaskAlertTemplate>(`/api/whatsapp/task-alert-template${ticketId ? `?ticket_id=${encodeURIComponent(ticketId)}` : ""}`),
+    welcomer: (audience: WaAudience) => get<WaWelcomerDetail>(`/api/whatsapp/welcomers/${audience}`),
+    activateWelcomer: (audience: WaAudience) => post<WaWelcomerState>(`/api/whatsapp/welcomers/${audience}/activate`),
+    deactivateWelcomer: (audience: WaAudience) => post<WaWelcomerState>(`/api/whatsapp/welcomers/${audience}/deactivate`),
+    /** Submits the Telugu version of this welcome template to Meta for review */
+    submitWelcomerTelugu: (audience: WaAudience) =>
+      post<{ ok: boolean; already: boolean; status: string }>(`/api/whatsapp/welcomers/${audience}/telugu`),
+    welcomerHistory: (audience: WaAudience, refresh = false) =>
+      get<WaWelcomerHistory>(`/api/whatsapp/welcomers/${audience}/history${refresh ? "?refresh=true" : ""}`),
+    welcomerPeople: (audience: WaAudience, params: { day?: string; status?: string; q?: string; offset?: number; limit?: number }) =>
+      get<WaWelcomerPeople>(
+        `/api/whatsapp/welcomers/${audience}/people?${new URLSearchParams(
+          Object.entries(params).filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => [k, String(v)]),
+        )}`,
+      ),
+    checkWelcomersNow: () => post<Record<string, number>>("/api/whatsapp/welcomers/check-now"),
+    welcomerCommercials: () => get<WaWelcomerCommercials>("/api/whatsapp/welcomer-commercials"),
+    /** Messages the platform sent, split by Meta category (utility / marketing / other). */
+    sentMessages: (params: Record<string, string | number>) =>
+      get<WaSentMessagesPage>(
+        `/api/whatsapp/messages?${new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)]))}`,
+      ),
+    saveCommercialRates: (body: WaRates) => request<WaRates>("PUT", "/api/whatsapp/commercials/rates", body, serviceUrl),
     /** Today's WhatsApp dispatch pipeline from real data (real-customer orders, real / simulated / failed sends). */
     flow: () => get<WhatsAppFlow>("/api/whatsapp/flow"),
-    qr: () =>
-      get<{ session_id?: string; qr?: string; status?: string; simulated?: boolean; message?: string; error?: string }>(
-        "/api/whatsapp/qr"
-      ),
-    start: () => post<{ session_id?: string; status?: string }>("/api/whatsapp/start"),
-    pairingCode: (phone: string) => post<{ code?: string; error?: string }>("/api/whatsapp/pairing-code", { phone }),
     templates: () => get<WhatsAppTemplate[]>("/api/whatsapp/templates"),
+    /** Templates offered in Bulk Msgs (marketing allow-list) with their Meta review status. */
+    bulkTemplates: () => get<WhatsAppTemplate[]>("/api/whatsapp/bulk-templates"),
+    /** Submits a new MARKETING template to Meta for approval and adds it to the bulk list. */
+    /** Removes a template from Bulk Msgs; fromMeta also deletes it permanently at Meta. */
+    deleteBulkTemplate: (name: string, fromMeta: boolean) =>
+      request<{ ok: boolean; name: string; deleted_from_meta: boolean }>(
+        "DELETE", `/api/whatsapp/bulk-templates/${encodeURIComponent(name)}${fromMeta ? "?from_meta=true" : ""}`, undefined, serviceUrl,
+      ),
+    createBulkTemplate: (body: {
+      name: string;
+      body: string;
+      examples: string[];
+      footer?: string;
+      language?: string;
+      header_image?: "none" | "brand" | "banner";
+      banner_filename?: string;
+    }) =>
+      post<{ ok: boolean; name: string; id: string; status: string }>("/api/whatsapp/bulk-templates", body),
     sendTemplate: (to: string, template_id: string, variables: Record<string, string>, ticket_id?: string) =>
       post<WhatsAppSendResult>("/api/whatsapp/send-template", { to, template_id, variables, ticket_id }),
     sendMessage: (to: string, message: string) => post<WhatsAppSendResult>("/api/whatsapp/send-message", { to, message }),
@@ -69,6 +140,11 @@ export function createWhatsAppService(
       const formData = new FormData();
       formData.append("file", file);
       return post<ParseContactsResponse>("/api/whatsapp/parse-contacts", formData);
+    },
+    uploadBanner: (file: File) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      return post<{ url: string; preview_url?: string; filename: string; meta_media_id?: string }>("/api/whatsapp/upload-banner", formData);
     },
     sendBulk: (payload: BulkMessageRequest) => post<BulkMessageResponse>("/api/whatsapp/send-bulk", payload),
     channelControls: () => get<WhatsAppChannelControls>("/api/whatsapp/channel-controls"),

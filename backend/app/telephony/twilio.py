@@ -29,7 +29,9 @@ class TwilioProvider:
         return f"https://api.twilio.com/2010-04-01/Accounts/{self.s.twilio_account_sid}{path}"
 
     def _callback(self, path: str, attempt_id: int) -> str:
-        return f"{self.s.public_base_url.rstrip('/')}/api/telephony/twilio/{path}?attempt_id={attempt_id}"
+        from ..config import public_base_url
+
+        return f"{public_base_url()}/api/telephony/twilio/{path}?attempt_id={attempt_id}"
 
     def place_call(self, attempt: CallAttempt) -> str:
         data = {

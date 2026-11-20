@@ -89,11 +89,39 @@ def _get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
     raise EngagementDataUnavailable(f"GET {path} failed")
 
 
+_refreshing: set = set()
+
+
+def _refresh_in_background(key: str, loader) -> None:
+    """Reload one cached value on a worker thread (at most one reload per key at a time)."""
+    with _lock:
+        if key in _refreshing:
+            return
+        _refreshing.add(key)
+
+    def _run() -> None:
+        try:
+            value = loader()
+            with _lock:
+                _cache[key] = (time.time(), value)
+        except Exception as exc:  # noqa: BLE001 - keep serving the last good data
+            logger.warning("[User Engagement] Background reload of %s failed: %s", key, exc)
+        finally:
+            with _lock:
+                _refreshing.discard(key)
+
+    threading.Thread(target=_run, daemon=True, name=f"extrahand-reload-{key}").start()
+
+
 def _cached(key: str, loader, max_age: float = POLL_SECONDS):
+    """Cached ExtraHand data. Reading all Works takes several seconds, so once something is cached a request
+    never waits for ExtraHand: stale data is returned at once and reloaded in the background."""
     with _lock:
         hit = _cache.get(key)
-        if hit and time.time() - hit[0] < max_age:
-            return hit[1], hit[0]
+    if hit:
+        if time.time() - hit[0] >= max_age:
+            _refresh_in_background(key, loader)
+        return hit[1], hit[0]
     value = loader()
     stamp = time.time()
     with _lock:
@@ -106,7 +134,9 @@ def _load_all_tasks() -> List[Dict[str, Any]]:
     tasks: Dict[str, Dict[str, Any]] = {}
     page = 1
     while page <= MAX_TASK_PAGES:
-        data = _get("/tasks", {"page": page, "limit": PAGE_SIZE})
+        # ExtraHand's /tasks lists only team-posted Works unless postedBy=all is given (API change, Nov 2026);
+        # read every Work so customer Works are counted and team-posted ones can still be reported as left out
+        data = _get("/tasks", {"page": page, "limit": PAGE_SIZE, "postedBy": "all"})
         items = extract_list(data)
         for t in items:
             tid = str(t.get("_id") or t.get("taskId") or "")
@@ -210,6 +240,43 @@ def customers_summary() -> Dict[str, Any]:
     return value
 
 
+# ---------------------------------------------------------------------------- helpers
+def _load_helpers() -> Dict[str, Any]:
+    """Every helper (ExtraHand role "partner"), test accounts left out: how many, who joined this month and today,
+    and how many are verified. Read whole (about 20 pages) because ExtraHand ignores filters such as isVerified."""
+    today = now_ist().date()
+    month_start = today.replace(day=1)
+    total = new_today = new_month = verified = aadhaar = with_jobs = blocked = 0
+    page = 1
+    while page <= 60:
+        data = _get("/users", {"role": "partner", "page": page, "limit": 100, "sortBy": "createdAt", "sortOrder": "desc"})
+        items = extract_list(data)
+        for u in items:
+            if u.get("isPaymentTester") or is_test_name(u.get("name")):
+                continue  # test account
+            total += 1
+            created = parse_time(u.get("createdAt"))
+            day = created.astimezone(IST).date() if created else None
+            if day and day >= month_start:
+                new_month += 1
+                new_today += 1 if day == today else 0
+            verified += 1 if u.get("isVerified") else 0
+            aadhaar += 1 if u.get("isAadhaarVerified") else 0
+            with_jobs += 1 if int(u.get("completedTasks") or 0) > 0 else 0
+            blocked += 1 if (u.get("bannedAt") or u.get("suspendedAt")
+                             or str(u.get("status") or "active").lower() not in ("active", "")) else 0
+        if page >= ((data.get("pagination") or {}).get("pages") or 1) or not items:
+            break
+        page += 1
+    return {"total": total, "new_today": new_today, "new_month": new_month, "verified": verified,
+            "aadhaar_verified": aadhaar, "with_completed_jobs": with_jobs, "blocked": blocked}
+
+
+def helpers_summary() -> Dict[str, Any]:
+    value, _ = _cached("helpers", _load_helpers)
+    return value
+
+
 # ---------------------------------------------------------------------------- support tickets
 def _load_support() -> Dict[str, Any]:
     try:
@@ -240,6 +307,12 @@ def clear_cache() -> None:
 _poller_started = False
 
 
+def _load_regions_lazy() -> Dict[str, Any]:
+    from .regions import _load_regions  # regions.py imports this module
+
+    return _load_regions()
+
+
 def start_poller() -> None:
     """Read ExtraHand when the backend starts and then every 5 minutes (the approved polling interval), so the
     dashboard always opens from fresh cached data. Does nothing unless EXTRAHAND_MODE=live."""
@@ -252,7 +325,8 @@ def start_poller() -> None:
         while True:
             try:
                 for key, loader in (("test_accounts", _load_test_accounts), ("tasks", _load_all_tasks),
-                                    ("customers", _load_customers), ("support", _load_support)):
+                                    ("customers", _load_customers), ("helpers", _load_helpers), ("regions", _load_regions_lazy),
+                                    ("support", _load_support)):
                     value = loader()
                     with _lock:
                         _cache[key] = (time.time(), value)

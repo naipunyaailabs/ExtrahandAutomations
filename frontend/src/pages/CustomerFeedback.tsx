@@ -1,16 +1,20 @@
 import React, { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { api } from "../api";
+import { useUrlState } from "../hooks";
 import type { CustomerFeedback } from "../types";
 
 export const CustomerFeedbackPage: React.FC = () => {
   const [feedbacks, setFeedbacks] = useState<CustomerFeedback[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"all" | "complaints" | "callbacks">("all");
-  const [selectedRating, setSelectedRating] = useState<number | "">("");
-  const [selectedCategory, setSelectedCategory] = useState<string>("");
-  const [searchQuery, setSearchQuery] = useState("");
+  // Tab and filters live in the URL so a reload keeps them
+  const [activeTab, setActiveTab] = useUrlState<"all" | "complaints" | "callbacks">("tab", "all", { push: true });
+  const [ratingParam, setRatingParam] = useUrlState<string>("rating", "");
+  const selectedRating: number | "" = ratingParam ? Number(ratingParam) : "";
+  const setSelectedRating = (v: number | "") => setRatingParam(v === "" ? "" : String(v));
+  const [selectedCategory, setSelectedCategory] = useUrlState<string>("category", "");
+  const [searchQuery, setSearchQuery] = useUrlState<string>("q", "");
   const [selectedFeedback, setSelectedFeedback] = useState<CustomerFeedback | null>(null);
   const [editNotes, setEditNotes] = useState("");
   const [editStatus, setEditStatus] = useState<string>("pending");

@@ -12,7 +12,7 @@ export default function CallingPage({ initialView = "dispatch" }: { initialView?
   const calls = usePoll(() => api.calls(), 2500);
   const tickets = usePoll(() => api.tickets(), 5000);
   const events = usePoll(() => api.events(25), 3000);
-  const helpers = usePoll(() => api.helpers(), 8000);
+  const helpers = usePoll(() => api.helpers(), 30000);
   const escalations = usePoll(() => api.escalations(), 4000);
 
   const refreshAll = () => {

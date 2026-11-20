@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from .commercials import router as commercials_router
 from .database import POSTERS_DIR
 from .models import CityEvent, CitySummary, PosterInfo
 from .festival_finder import finder_status, llm_ready, start_finder
@@ -198,14 +199,14 @@ async def generate_poster(event_id: str):
 @advestiment_router.get("/poster-art/{filename}")
 async def get_poster_art(filename: str):
     """Serve AI-generated poster artwork."""
-    from .agent.poster_agent import poster_art_dir
+    from app.services import media_store
 
     if not re.fullmatch(r"[A-Za-z0-9_.-]+[.](png|jpg|webp)", filename):
         raise HTTPException(status_code=400, detail="Invalid file name")
-    path = poster_art_dir() / filename
-    if not path.exists():
+    data = media_store.get("posters/art", filename)
+    if data is None:
         raise HTTPException(status_code=404, detail="Artwork not found")
-    return FileResponse(path)
+    return Response(content=data, media_type=media_store.media_type(filename))
 
 
 @advestiment_router.get("/events/{event_id}/poster")
@@ -214,14 +215,16 @@ async def get_event_poster_file(event_id: str, download: bool = False):
     ev = get_advestiment_service().get_event_by_id(event_id)
     if not ev:
         raise HTTPException(status_code=404, detail="Event not found")
-    poster = POSTERS_DIR / f"{event_id}.jpg"
-    if not poster.exists():
+    from app.services import media_store
+
+    data = media_store.get("posters", f"{event_id}.jpg")
+    if data is None:
         raise HTTPException(status_code=404, detail="No poster yet: the poster agent has not created one.")
     headers = {"Cache-Control": "no-cache"}
     if download:
         name = re.sub(r"[^a-z0-9]+", "-", ev.title.lower()).strip("-") or "festival"
         headers["Content-Disposition"] = f'attachment; filename="{name}-poster.jpg"'
-    return Response(content=poster.read_bytes(), media_type="image/jpeg", headers=headers)
+    return Response(content=data, media_type="image/jpeg", headers=headers)
 
 
 # ------------------------------------------------------------------ calendar (keep below the /events/... routes)
@@ -232,8 +235,13 @@ async def get_region_calendar(city: str, year: Optional[int] = None, month: Opti
 
 
 # /api/advestiment and the same routes under /api/marketing
+advestiment_router.include_router(commercials_router)  # /api/advestiment/commercials
 marketing_router = APIRouter(tags=["Marketing & Advertisement Service"])
 marketing_router.include_router(advestiment_router)
 marketing_api_router = APIRouter(prefix="/api/marketing", tags=["Marketing & Advertisement Service"])
 marketing_api_router.include_router(advestiment_router, prefix="")
 marketing_router.include_router(marketing_api_router)
+
+from .task_seeding import router as task_seeding_router  # noqa: E402
+
+marketing_router.include_router(task_seeding_router)  # /api/marketing/task-seeding (Task-Seeding Agent)

@@ -7,10 +7,10 @@ from datetime import timedelta
 from ..config import get_settings
 from ..database import SessionLocal
 from ..models import CallAttempt, DispatchRun, DispatchStatus, Event, Ticket, utcnow
-from . import ivr
-from .common import runtime_settings
-from .dispatch import DispatchError, start_dispatch
-from .feedback_agent import process_due_feedback_calls
+from . import ivr, tts_audio
+from .common import call_window, runtime_settings
+from .dispatch import DispatchError, get_provider_safe, start_dispatch
+from .feedback_agent import process_due_feedback_callbacks, process_due_feedback_calls
 from .followups import process_due
 from .sync import last_sync, sync_tickets
 
@@ -21,7 +21,13 @@ def expire_stale_calls(db) -> int:
     cutoff = utcnow() - timedelta(minutes=get_settings().call_stale_minutes)
     stale = db.query(CallAttempt).filter(CallAttempt.status.in_(ivr.ACTIVE_STATUSES),
                                          CallAttempt.created_at < cutoff).all()
+    provider, _ = get_provider_safe()
     for a in stale:
+        if provider and a.provider_call_id and a.provider == provider.name:
+            try:  # a call that never reported back may still be open at the provider, and billing
+                provider.hangup(a)
+            except Exception as exc:
+                log.warning("call %s: could not hang up %s at the provider: %s", a.id, a.provider_call_id, exc)
         ivr.ended(db, a, "failed", error="No final call status received (timed out)")
     db.commit()
     return len(stale)
@@ -31,11 +37,17 @@ def auto_dispatch(db) -> int:
     r = runtime_settings(db)
     if not r.auto_dispatch or not r.workflow_helper_dispatch_enabled or r.emergency_stop_calls:
         return 0
+    from .common import within_calling_hours
+
+    if not within_calling_hours(db):
+        return 0  # tasks wait until calling hours open
     now = utcnow()
     started = 0
     tickets = db.query(Ticket).filter(Ticket.dispatch_status == DispatchStatus.NEW).all()
     for t in tickets:
-        if t.scheduled_at and t.scheduled_at < now:
+        # Calls start dispatch_lead_hours (6 h) before the task; a task with no time is called right away
+        hours = (r.calling_hours_start, r.calling_hours_end)
+        if call_window(t, r.dispatch_lead_hours, now, calling_hours=hours)[0] not in ("open", "flexible"):
             continue
         # Only tickets that were never dispatched; re-runs are a human decision
         if db.query(DispatchRun).filter_by(ticket_id=t.id).first():
@@ -43,7 +55,11 @@ def auto_dispatch(db) -> int:
         try:
             start_dispatch(db, t.id, trigger="auto")
             started += 1
-            if r.workflow_whatsapp_dispatch_enabled:
+            if r.workflow_whatsapp_dispatch_enabled and r.whatsapp_automation_active:
+                from whatsapp.service import claim_task_alert
+
+                if not claim_task_alert(t.id):
+                    continue
                 try:
                     from whatsapp.service import get_whatsapp_service
                     wa = get_whatsapp_service()
@@ -69,7 +85,7 @@ def auto_broadcast_whatsapp_tickets(db) -> int:
     if getattr(s, "whatsapp_simulated", True):
         return 0
     r = runtime_settings(db)
-    if not r.auto_dispatch or not r.workflow_helper_dispatch_enabled:
+    if not r.auto_dispatch or not r.workflow_helper_dispatch_enabled or not r.whatsapp_automation_active:
         return 0
 
     now = utcnow()
@@ -98,6 +114,13 @@ def auto_broadcast_whatsapp_tickets(db) -> int:
     return count
 
 
+def sweep_ivr_audio(db) -> int:
+    """Deletes per-call Telugu audio that outlived its call. Only calls placed through Vobiz make any."""
+    if get_settings().telephony_provider != "vobiz":
+        return 0
+    return tts_audio.sweep(timedelta(hours=2))
+
+
 def tick() -> None:
     s = get_settings()
     with SessionLocal() as db:
@@ -120,9 +143,32 @@ def tick() -> None:
                 last_sync.update(at=utcnow(), ok=False, error=err_msg)
                 log.warning("[ExtraHand Sync Error] %s", e)
 
+        # Welcomers run on their own switches, whatever the calling agent is doing
+        try:
+            from whatsapp.welcomers import run_welcomers
+
+            run_welcomers(db)
+        except Exception:  # noqa: BLE001
+            db.rollback()
+            log.exception("welcomers step failed")
+        try:
+            from marketing.task_seeding import run_task_seeding
+
+            run_task_seeding(db)  # Task-Seeding Agent: first-booking nudges to new customers (off by default)
+        except Exception:  # noqa: BLE001
+            db.rollback()
+            log.exception("task seeding step failed")
+        try:
+            from whatsapp.feedback import run_feedback
+
+            run_feedback(db)  # WhatsApp feedback form to customers of newly completed tasks
+        except Exception:  # noqa: BLE001
+            db.rollback()
+            log.exception("feedback step failed")
+
         r = runtime_settings(db)
-        if r.emergency_stop_calls:
-            log.warning("EMERGENCY KILL SWITCH ACTIVE: Automated calls are paused.")
+        if r.emergency_stop_calls or not r.calling_agent_active:
+            log.warning("CALLING AGENT DEACTIVATED: Automated calls are paused.")
             # Still expire stale calls and allow WhatsApp notifications
             try:
                 expire_stale_calls(db)
@@ -131,7 +177,18 @@ def tick() -> None:
                 db.rollback()
             return
 
-        for step in (process_due, expire_stale_calls, auto_dispatch, auto_broadcast_whatsapp_tickets, process_due_feedback_calls):
+        from .dispatch import resume_waiting_runs
+
+        for step in (
+            resume_waiting_runs,
+            process_due,
+            expire_stale_calls,
+            auto_dispatch,
+            auto_broadcast_whatsapp_tickets,
+            process_due_feedback_calls,
+            process_due_feedback_callbacks,
+            sweep_ivr_audio,
+        ):
             try:
                 step(db)
             except Exception:  # noqa: BLE001

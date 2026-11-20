@@ -7,7 +7,7 @@ import { usePoll } from "../hooks";
 export default function WhatsAppPage({ section }: { section: WhatsAppSection }) {
   const tickets = usePoll(() => api.tickets(), 5000);
   const waStatus = usePoll(api.whatsapp.status, 6000);
-  const helpers = usePoll(() => api.helpers(), 8000);
+  const helpers = usePoll(() => api.helpers(), 30000);
   const events = usePoll(() => api.events(20), 4000);
 
   const refreshAll = () => {

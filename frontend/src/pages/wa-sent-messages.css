@@ -1,0 +1,150 @@
+/* Sent Messages (WhatsApp Agent · Connection). Colours come from the --wx-* tokens in wa-commercials.css. */
+
+.wsm-sub { margin: 6px 0 0; font-size: 13px; color: rgba(255, 255, 255, 0.8); }
+
+/* ------------------------------------------------------------------ category tabs */
+.wsm-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+@media (max-width: 1000px) { .wsm-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 520px) { .wsm-tabs { grid-template-columns: 1fr; } }
+.wsm-tab { --c: var(--wx-mid); display: flex; align-items: center; gap: 12px; text-align: left; padding: 12px 14px;
+  border-radius: 14px; border: 1px solid var(--wx-rule); background: var(--wx-paper); color: var(--text);
+  font: inherit; cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s; min-width: 0; }
+.wsm-tab:hover { transform: translateY(-1px); border-color: var(--c); }
+.wsm-tab.on { border-color: var(--c); box-shadow: 0 0 0 1px var(--c), 0 6px 18px rgba(0, 0, 0, 0.06); }
+.wsm-tab-utility { --c: var(--wx-utility); }
+.wsm-tab-marketing { --c: var(--wx-marketing); }
+.wsm-tab-other { --c: var(--wx-service); }
+.wsm-tab-icon { flex: none; width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center;
+  color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); }
+.wsm-tab-text { display: grid; min-width: 0; flex: 1; }
+.wsm-tab-text span { font-size: 13.5px; font-weight: 650; }
+.wsm-tab-text small { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wsm-tab b { font-size: 20px; font-weight: 750; color: var(--c); }
+
+/* ------------------------------------------------------------------ filters */
+.wsm-filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.wsm-search { flex: 1 1 280px; display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px;
+  border: 1px solid var(--wx-rule); border-radius: 10px; background: var(--surface); color: var(--muted); }
+.wsm-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; font-size: 13px; }
+.wsm-filters select { height: 36px; padding: 0 10px; border: 1px solid var(--wx-rule); border-radius: 10px;
+  background: var(--surface); color: var(--text); font: inherit; font-size: 13px; }
+
+/* ------------------------------------------------------------------ messages */
+.wsm-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.wsm-msg { --c: var(--wx-service); padding: 12px 14px; border: 1px solid var(--wx-rule); border-left: 4px solid var(--c);
+  border-radius: 12px; background: var(--surface); min-width: 0; }
+.wsm-c-utility { --c: var(--wx-utility); }
+.wsm-c-marketing { --c: var(--wx-marketing); }
+.wsm-msg-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; font-size: 13px; }
+.wsm-time { margin-left: auto; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.wsm-cat { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; color: #fff;
+  font-size: 11px; font-weight: 700; text-transform: capitalize; letter-spacing: 0.02em; }
+.wsm-cat em { font-style: normal; font-weight: 600; opacity: 0.85; text-transform: none; }
+.wsm-chip { padding: 1px 8px; border-radius: 999px; background: var(--wx-track); color: var(--text-2); font-size: 11.5px; white-space: nowrap; }
+.wsm-chip-tpl { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+.wsm-bubble { margin: 8px 0 6px; padding: 9px 12px; border-radius: 4px 12px 12px 12px; background: var(--wx-tint);
+  border: 1px solid color-mix(in srgb, var(--wx-glow) 18%, transparent); font-size: 13.5px; line-height: 1.5;
+  color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.wsm-bubble-missing { font-style: italic; color: var(--muted); }
+.wsm-clamp { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.wsm-msg-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; font-size: 12px; color: var(--muted); }
+.wsm-status { display: inline-flex; align-items: center; gap: 4px; font-weight: 650; }
+.wsm-st-read { color: var(--wx-read); }
+.wsm-st-delivered { color: var(--wx-delivered); }
+.wsm-st-sent { color: var(--wx-sent); }
+.wsm-st-failed { color: var(--danger); }
+.wsm-st-sim { color: var(--muted); }
+.wsm-err { display: inline-flex; align-items: center; gap: 4px; color: var(--danger); overflow-wrap: anywhere; }
+
+/* ------------------------------------------------------------------ pager */
+.wsm-pager { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 14px; font-size: 12.5px; color: var(--muted); }
+.wsm-pager > span { margin-right: auto; }
+.wsm-page-btn { display: inline-flex; align-items: center; gap: 4px; height: 30px; padding: 0 12px; border-radius: 999px;
+  border: 1px solid var(--wx-rule); background: var(--surface); color: var(--text); font: inherit; font-size: 12.5px; cursor: pointer; }
+.wsm-page-btn:disabled { opacity: 0.45; cursor: default; }
+
+/* sent (green) / not sent (red) split under each tab's total */
+.wsm-tab { --ok: #16a34a; --bad: #dc2626; }
+:root[data-theme="dark"] .wsm-tab { --ok: #4ade80; --bad: #f87171; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .wsm-tab { --ok: #4ade80; --bad: #f87171; } }
+.wsm-tab-nums { display: grid; justify-items: end; gap: 3px; flex: none; }
+.wsm-tab-nums > b { line-height: 1; }
+.wsm-split { display: grid; justify-items: end; gap: 1px; }
+.wsm-split > span { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; font-weight: 650; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.wsm-split i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.wsm-ok { color: var(--ok); }
+.wsm-bad { color: var(--bad); }
+.wsm-bad.wsm-zero { color: var(--muted); }
+
+/* ================================================================ message cards (v2) */
+.wsm-list { gap: 10px; }
+.wsm-card {
+  --c: var(--wx-service); --ok: #16a34a; --bad: #dc2626; --tick: #8696a0; --tick-read: #53bdeb;
+  display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 12px; padding: 14px 16px;
+  border: 1px solid var(--wx-rule); border-radius: 14px; background: var(--surface); min-width: 0;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.wsm-card:hover { border-color: color-mix(in srgb, var(--c) 45%, var(--wx-rule)); box-shadow: 0 4px 14px rgba(15, 23, 42, 0.05); }
+.wsm-card.wsm-c-utility { --c: var(--wx-utility); }
+.wsm-card.wsm-c-marketing { --c: var(--wx-marketing); }
+.wsm-card.wsm-s-failed { border-color: color-mix(in srgb, var(--bad) 35%, var(--wx-rule)); background: color-mix(in srgb, var(--bad) 3%, var(--surface)); }
+:root[data-theme="dark"] .wsm-card { --ok: #4ade80; --bad: #f87171; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .wsm-card { --ok: #4ade80; --bad: #f87171; } }
+
+.wsm-card-icon { width: 38px; height: 38px; border-radius: 11px; display: grid; place-items: center; color: var(--c);
+  background: color-mix(in srgb, var(--c) 13%, transparent); }
+.wsm-card-main { display: grid; gap: 8px; min-width: 0; }
+
+.wsm-card-top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.wsm-phone { font-size: 14.5px; color: var(--text); letter-spacing: 0.01em; }
+.wsm-cat-pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 700;
+  text-transform: capitalize; color: var(--c); background: color-mix(in srgb, var(--c) 12%, transparent); }
+.wsm-cat-pill em { font-style: normal; font-weight: 600; opacity: 0.8; text-transform: none; }
+.wsm-card-top .wsm-time { margin-left: auto; font-size: 12px; color: var(--muted); white-space: nowrap; }
+
+.wsm-status { display: inline-flex; align-items: center; gap: 4px; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 700; }
+.wsm-st-sent { color: var(--ok); background: color-mix(in srgb, var(--ok) 11%, transparent); }
+.wsm-st-delivered { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); }
+.wsm-st-read { color: var(--wx-read); background: color-mix(in srgb, var(--wx-read) 13%, transparent); }
+.wsm-st-failed { color: var(--bad); background: color-mix(in srgb, var(--bad) 12%, transparent); }
+.wsm-st-sim { color: var(--muted); background: var(--wx-track); }
+
+.wsm-card-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
+.wsm-card-sub > * + *::before { content: "·"; margin-right: 4px; color: var(--wx-rule); }
+.wsm-card-sub code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; color: var(--text-2); }
+.wsm-card-sub code::before { font-family: inherit; }
+
+/* WhatsApp-style bubble */
+.wsm-wa { position: relative; max-width: 680px; border-radius: 4px 14px 14px 14px; padding: 10px 12px 6px;
+  background: color-mix(in srgb, var(--wx-glow) 9%, var(--surface)); border: 1px solid color-mix(in srgb, var(--wx-glow) 20%, var(--wx-rule)); }
+.wsm-s-failed .wsm-wa { background: var(--wx-track); border-color: var(--wx-rule); opacity: 0.85; }
+.wsm-wa-text { font-size: 13.5px; line-height: 1.55; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.wsm-wa-clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.wsm-wa-missing .wsm-wa-text { font-style: italic; color: var(--muted); }
+.wsm-wa-meta { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-top: 4px; font-size: 11px; color: var(--muted); }
+.wsm-more { margin-right: auto; border: 0; background: none; padding: 0; font: inherit; font-size: 12px; font-weight: 650; color: var(--wx-mid); cursor: pointer; }
+:root[data-theme="dark"] .wsm-more { color: var(--wx-glow); }
+.wsm-wa-ticks { display: inline-flex; color: var(--tick); }
+.wsm-wa-ticks.wsm-tick-del { color: var(--tick); }
+.wsm-wa-ticks.wsm-tick-read { color: var(--tick-read); }
+
+.wsm-errbox { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border-radius: 10px; font-size: 12.5px; line-height: 1.45;
+  color: var(--bad); background: color-mix(in srgb, var(--bad) 8%, transparent); border: 1px solid color-mix(in srgb, var(--bad) 22%, transparent); }
+.wsm-errbox svg { flex: none; margin-top: 2px; }
+.wsm-errbox span { overflow-wrap: anywhere; }
+
+.wsm-card-foot { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: var(--muted); }
+.wsm-card-foot span { display: inline-flex; align-items: center; gap: 4px; }
+.wsm-card-foot .wsm-read-at { color: var(--wx-read); }
+
+@media (max-width: 560px) {
+  .wsm-card { grid-template-columns: 1fr; padding: 12px; }
+  .wsm-card-icon { display: none; }
+  .wsm-card-top .wsm-time { margin-left: 0; width: 100%; }
+}
+
+/* two messages side by side on wide screens */
+.wsm-list { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: stretch; }
+.wsm-list .wsm-card { align-content: start; }
+.wsm-list .wsm-wa { max-width: none; }
+@media (max-width: 1100px) { .wsm-list { grid-template-columns: 1fr; } }

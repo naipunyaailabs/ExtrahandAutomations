@@ -363,7 +363,7 @@ export function getCanonicalLocations(h: Helper | null | undefined): string[] {
  * Formats a clean, readable location summary for a helper row.
  */
 export function formatHelperDisplayLocation(h: Helper | null | undefined): string {
-  if (!h) return "Bangalore";
+  if (!h) return "Location not set";
   const cityClean = cleanLocationName(h.city);
   const areasClean = (h.work_areas || []).map(cleanLocationName).filter(Boolean) as string[];
 
@@ -385,6 +385,6 @@ export function formatHelperDisplayLocation(h: Helper | null | undefined): strin
     const firstPart = h.address.split(",")[0]?.trim();
     if (firstPart && firstPart.length < 30) return firstPart;
   }
-  return "Bangalore";
+  return "Location not set";
 }
 

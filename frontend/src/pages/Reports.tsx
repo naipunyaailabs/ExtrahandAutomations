@@ -8,13 +8,17 @@ import {
   Headphones,
   RefreshCw,
   Search,
+  ShieldCheck,
   ShoppingBag,
+  UserCheck,
   UserPlus,
   Users,
+  Wrench,
   Wifi,
   XCircle,
 } from "lucide-react";
 import { api } from "../api";
+import { useUrlState } from "../hooks";
 import type { DashboardOrderItem, EngagementDashboardSummary } from "../types";
 
 /**
@@ -89,8 +93,8 @@ export const ReportsPage: React.FC = () => {
   const [data, setData] = useState<EngagementDashboardSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [filter, setFilter] = useState<StateFilter>("all");
-  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useUrlState<StateFilter>("show", "all");
+  const [query, setQuery] = useUrlState<string>("q", "");
 
   const load = async () => {
     try {
@@ -208,6 +212,9 @@ export const ReportsPage: React.FC = () => {
 
       <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
         {/* ------------------------------------------------------------------ KPI cards (compact) */}
+        <div style={{ fontSize: "11px", fontWeight: 800, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "-0.5rem" }}>
+          Customers
+        </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(175px, 1fr))", gap: "0.75rem" }}>
           <Kpi
             label="Total Customers"
@@ -255,6 +262,61 @@ export const ReportsPage: React.FC = () => {
                 : "Not available from ExtraHand right now"
             }
           />
+        </div>
+
+        {/* ------------------------------------------------------------------ helper KPI cards (same style) */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+          <div style={{ fontSize: "11px", fontWeight: 800, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+            Helpers
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(175px, 1fr))", gap: "0.75rem" }}>
+            <Kpi
+              label="Total Helpers"
+              value={data?.helpers?.total != null ? n(data.helpers.total) : "—"}
+              icon={<Wrench size={14} />}
+              tint={{ fg: "#2563eb", bg: "#eff6ff", border: "#dbeafe" }}
+              note={data?.helpers?.new_month != null ? `${n(data.helpers.new_month)} joined in ${monthName}` : "Registered helpers"}
+            />
+            <Kpi
+              label="New Today"
+              value={data?.helpers?.new_today != null ? n(data.helpers.new_today) : "—"}
+              icon={<UserPlus size={14} />}
+              tint={{ fg: "#0891b2", bg: "#ecfeff", border: "#cffafe" }}
+              note={data?.helpers?.new_today != null ? "Helpers who registered today" : "Needs live ExtraHand data"}
+            />
+            <Kpi
+              label="Active This Month"
+              value={n(data?.helpers?.active_month)}
+              icon={<Calendar size={14} />}
+              tint={{ fg: "#7c3aed", bg: "#f5f3ff", border: "#ede9fe" }}
+              note={`Helpers assigned a Work in ${monthName}`}
+            />
+            <Kpi
+              label="Active Today"
+              value={n(data?.helpers?.active_today)}
+              icon={<Clock size={14} />}
+              tint={{ fg: "#059669", bg: "#ecfdf5", border: "#d1fae5" }}
+              note="Helpers with a Work today"
+            />
+            <Kpi
+              label="Today's Works Assigned"
+              value={data ? `${n(data.helpers?.today_assigned)} / ${n(data.today_orders_count)}` : "—"}
+              icon={<UserCheck size={14} />}
+              tint={{ fg: "#1d4ed8", bg: "#eff6ff", border: "#dbeafe" }}
+              note={`${n(data?.helpers?.month_assigned)} of ${n(data?.monthly_orders_count)} Works in ${monthName} have a helper`}
+            />
+            <Kpi
+              label="Aadhaar Verified"
+              value={data?.helpers?.aadhaar_verified != null ? n(data.helpers.aadhaar_verified) : "—"}
+              icon={<ShieldCheck size={14} />}
+              tint={{ fg: "#db2777", bg: "#fdf2f8", border: "#fce7f3" }}
+              note={
+                data?.helpers?.with_completed_jobs != null
+                  ? `${n(data.helpers.with_completed_jobs)} helpers have completed a job`
+                  : "Needs live ExtraHand data"
+              }
+            />
+          </div>
         </div>
 
         {/* ------------------------------------------------------------------ today's outcome */}

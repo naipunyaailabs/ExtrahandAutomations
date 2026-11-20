@@ -1,0 +1,47 @@
+# =============================================================================
+# Docker Ignore Rules for ExtraHand Intelligence Platform
+# Keeps builds fast and prevents secrets or binary caches from leaking into images.
+# =============================================================================
+
+# Source control
+.git
+.gitignore
+.gitattributes
+
+# Environment secrets (injected via compose env_file at runtime)
+**/.env
+**/.env.*
+!**/.env.example
+**/*.env
+
+# Python build artifacts and local virtual environments
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.venv
+backend/.venv
+*.egg-info
+
+# Frontend build cache and dependencies
+frontend/node_modules
+frontend/dist
+**/*.tsbuildinfo
+.npm
+
+# Databases, local backups, and ephemeral media
+backend/database/*.db
+backend/database/*.db-*
+backend/database/backups
+backend/database/ivr_audio/*.wav
+backend/database/whatsapp_banners/*
+backend/database/posters/*
+
+# Ephemeral runtime logs & binaries
+backend/cloudflared*
+*.exe
+**/*.log
+
+# Non-production documentation & scripts
+Doc
+*.bat
+README.md

@@ -1,0 +1,83 @@
+# =============================================================================
+# ExtraHand Intelligence Platform - Nginx Reverse Proxy Example
+#
+# Frontend : https://intelligence.extrahand.in          -> 127.0.0.1:3074
+# Backend  : https://backend.intelligence.extrahand.in  -> 127.0.0.1:5074
+# =============================================================================
+
+limit_req_zone $binary_remote_addr zone=ex_login:10m rate=10r/m;
+limit_req_zone $binary_remote_addr zone=ex_hooks:10m rate=30r/s;
+limit_req_zone $binary_remote_addr zone=ex_pricing:10m rate=30r/s;
+
+# Frontend (Port 3074)
+server {
+    listen 80;
+    server_name intelligence.extrahand.in;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name intelligence.extrahand.in;
+
+    ssl_certificate     /etc/letsencrypt/live/intelligence.extrahand.in/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/intelligence.extrahand.in/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:3074;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:5074;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 120s;
+    }
+}
+
+# Backend (Port 5074)
+server {
+    listen 80;
+    server_name backend.intelligence.extrahand.in;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name backend.intelligence.extrahand.in;
+
+    ssl_certificate     /etc/letsencrypt/live/backend.intelligence.extrahand.in/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/backend.intelligence.extrahand.in/privkey.pem;
+
+    client_max_body_size 25m;
+
+    location /api/auth/login {
+        limit_req zone=ex_login burst=5 nodelay;
+        proxy_pass http://127.0.0.1:5074;
+    }
+
+    location ~ ^/api/(telephony|handoff|whatsapp/webhook) {
+        limit_req zone=ex_hooks burst=50 nodelay;
+        proxy_pass http://127.0.0.1:5074;
+    }
+
+    location /api/pricing/v1/ {
+        limit_req zone=ex_pricing burst=50 nodelay;
+        proxy_pass http://127.0.0.1:5074;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:5074;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 120s;
+    }
+}

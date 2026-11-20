@@ -22,11 +22,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import httpx
-
 from app.branding import company, website_host
 from app.config import BACKEND_DIR, get_settings
 
+from .. import metering
 from ..database import POSTERS_DIR, db_save_poster, db_update_event_fields
 from .research_agent import research_festival, write_poster_brief
 
@@ -191,8 +190,8 @@ class AIPosterAgent:
         st = get_settings()
         if not (st.openrouter_api_key.strip() and st.poster_image_model.strip()):
             raise RuntimeError("Set OPENROUTER_API_KEY and POSTER_IMAGE_MODEL to create posters.")
-        res = httpx.post(
-            st.openrouter_api_url,
+        res = metering.post(
+            "draw", st.openrouter_api_url,
             headers=_headers("Poster Agent"),
             json={
                 "model": st.poster_image_model,
@@ -234,8 +233,8 @@ class AIPosterAgent:
             "\"face_boxes\": [[ymin, xmin, ymax, xmax] for every human face, on a 0-1000 scale]}"
         )
         try:
-            res = httpx.post(
-                st.openrouter_api_url,
+            res = metering.post(
+                "check", st.openrouter_api_url,
                 headers=_headers("Poster Checker"),
                 json={
                     "model": st.openrouter_model,
@@ -283,22 +282,20 @@ class AIPosterAgent:
     @staticmethod
     def remove_old_files(event_id: str) -> int:
         """Delete every earlier poster file of the event (posters and old artwork)."""
+        from app.services import media_store
+
         safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", event_id)
-        old = [*POSTERS_DIR.glob(f"{event_id}.*"), *poster_art_dir().glob(f"{safe_id}-v*.*")]
-        removed = 0
-        for f in old:
-            try:
-                f.unlink()
-                removed += 1
-            except OSError as exc:
-                logger.warning("[Poster Agent] Could not delete old poster file %s: %s", f, exc)
-        return removed
+        return media_store.delete_prefix("posters", f"{event_id}.") + media_store.delete_prefix("posters/art", f"{safe_id}-v")
 
     # ------------------------------------------------------------------ the whole pipeline
     def generate_poster_for_event(self, event: Dict[str, Any], regenerate: bool = False) -> Dict[str, Any]:
         """Agent 1 researches the festival and designs a new poster; Agent 2 draws and checks it; the new poster
         replaces the old one. Raises when no poster could be drawn (the old poster is then kept)."""
-        event = dict(event)
+        # Every AI request below (research, brief, draws, checks) is costed as one poster
+        with metering.job("poster", str(event.get("id") or ""), str(event.get("title") or "")):
+            return self._generate(dict(event))
+
+    def _generate(self, event: Dict[str, Any]) -> Dict[str, Any]:
         event_id = str(event.get("id") or f"event_{datetime.now().strftime('%Y%m%d%H%M%S')}")
         previous = _design(event)
         variant = int(previous.get("variant") or 0) + 1
@@ -358,7 +355,9 @@ class AIPosterAgent:
         # The official logo is mandatory; it goes where it covers no text and no face
         image, logo_at = stamp_logo(image, logo_at, result.pop("keep_clear", None) if result.get("checked") else None)
         self.remove_old_files(event_id)
-        (POSTERS_DIR / f"{event_id}.jpg").write_bytes(image)
+        from app.services import media_store
+
+        media_store.put("posters", f"{event_id}.jpg", image, "image/jpeg")
 
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         design = {

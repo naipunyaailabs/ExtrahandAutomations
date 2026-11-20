@@ -174,7 +174,15 @@ def _summarise(orders: List[Dict[str, Any]], today, month_start) -> Dict[str, An
         if o.get("booking_source"):
             sources[o["booking_source"]] = sources.get(o["booking_source"], 0) + 1
     today_orders.sort(key=lambda o: o.get("scheduled_at") or o.get("created_at") or "")
+    helper_month = {o.get("helper_key") for o in month if o.get("helper_key")}
+    helper_today = {o.get("helper_key") for o in today_orders if o.get("helper_key")}
     return {
+        "helpers": {
+            "active_month": len(helper_month),
+            "active_today": len(helper_today),
+            "today_assigned": sum(1 for o in today_orders if o.get("helper_key")),
+            "month_assigned": sum(1 for o in month if o.get("helper_key")),
+        },
         "active_users_month": len({o["customer_key"] for o in month if o["customer_key"]}),
         "active_users_today": len({o["customer_key"] for o in today_orders if o["customer_key"]}),
         "today_orders_count": len(today_orders),
@@ -185,11 +193,21 @@ def _summarise(orders: List[Dict[str, Any]], today, month_start) -> Dict[str, An
         "monthly_success": count(month, "success"),
         "monthly_fail": count(month, "fail"),
         "monthly_pending": count(month, "pending"),
-        "today_orders": [{k: v for k, v in o.items() if k not in ("customer_key", "created_day", "scheduled_day", "category_slug")}
+        "today_orders": [{k: v for k, v in o.items() if k not in ("customer_key", "helper_key", "created_day", "scheduled_day", "category_slug")}
                          for o in today_orders],
         "categories_breakdown": categories,
         "booking_sources": sources,
     }
+
+
+def _helper_key(t: Dict[str, Any]) -> str:
+    """The helper the Work is assigned to; "" when nobody is. (``assignedTo`` is the ExtraHand staff member who owns
+    the Work, an admin_... account, not the helper, so it is not used.)"""
+    for v in (t.get("assigneeId"), t.get("assigneeUid"), t.get("partnerId"), t.get("partnerUid"),
+              t.get("assignedHelperName"), t.get("assigneeName")):
+        if v:
+            return str(v)
+    return ""
 
 
 def live_orders() -> Dict[str, Any]:
@@ -225,6 +243,7 @@ def live_orders() -> Dict[str, Any]:
             "booking_source": t.get("bookingSource") or "",
             "posted_by": t.get("postedBy") or "",
             "helper_name": t.get("assignedHelperName") or t.get("assigneeName") or "",
+            "helper_key": _helper_key(t),
             "customer_key": str(t.get("CustomerId") or t.get("customerId") or t.get("requesterId")
                                 or t.get("customerPhone") or ""),
             "created_day": created.astimezone(IST).date() if created else None,
@@ -282,6 +301,7 @@ def local_orders(db: Session) -> Dict[str, Any]:
             "booking_source": t.booking_source or "",
             "posted_by": "",
             "helper_name": t.assignee_name or "",
+            "helper_key": t.assignee_id or t.assignee_name or "",
             "customer_key": t.customer_id or t.customer_phone or t.customer_name or "",
             "created_day": ist_day(booked_naive),
             "scheduled_day": ist_day(t.scheduled_at),
@@ -306,7 +326,7 @@ def load_orders(db: Session) -> Dict[str, Any]:
 
 
 def _live_dashboard(today, month_start) -> Dict[str, Any]:
-    from .extrahand_data import customers_summary, support_summary
+    from .extrahand_data import customers_summary, helpers_summary, support_summary
 
     data = live_orders()
     orders, ex = data["orders"], data["excluded"]
@@ -318,6 +338,7 @@ def _live_dashboard(today, month_start) -> Dict[str, Any]:
         "new_users_month": customers["new_month"],
         "total_orders_all_time": len(orders),
         "support": support_summary(),
+        "helpers": {**helpers_summary(), **result["helpers"]},
         "source": "live",
         "source_note": (f"Live from ExtraHand: real customers only ({len(orders)} customer Works, "
                         f"{customers['total']} customers). Left out: {ex['team_posted_works']} Works posted by the "
@@ -340,6 +361,7 @@ def _local_dashboard(db: Session, today, month_start, reason: str) -> Dict[str, 
         "new_users_month": None,
         "total_orders_all_time": len(orders),
         "support": {"available": False, "reason": "Only available from live ExtraHand data."},
+        "helpers": {"total": db.query(Helper).count(), **result["helpers"]},
         "source": "local",
         "source_note": f"Local database copy (ExtraHand live data unavailable: {reason[:160]})",
         "fetched_at": data["fetched_at"],

@@ -1,13 +1,16 @@
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..database import get_db
-from ..models import CallAttempt, Ticket
-from ..services import ivr
+from ..models import CallAttempt, FollowUp, Ticket
+from ..services import handoff, ivr
 from ..services.common import engine_lock
-from .serializers import call_out
+from ..services.handoff import RatingResult, ReminderResult
+from .serializers import call_out, iso
 
 router = APIRouter(prefix="/api", tags=["calls"])
 
@@ -33,9 +36,37 @@ def list_calls(active: bool = False, purpose: str | None = None, limit: int = 20
     return [call_out(c, tickets.get(c.ticket_id)) for c in calls]
 
 
+@router.get("/calls/{call_id}")
+def get_call(call_id: int, db: Session = Depends(get_db)):
+    """One call with its trail, its ticket and the reminder it belongs to."""
+    a = db.get(CallAttempt, call_id)
+    if not a:
+        raise HTTPException(404, "Unknown call")
+    t = db.get(Ticket, a.ticket_id)
+    out = call_out(a, t, detail=True)
+    out["ticket"] = {
+        "id": t.id,
+        "title": t.title,
+        "category": t.category,
+        "city": t.city,
+        "address": t.address,
+        "scheduled_at": iso(t.scheduled_at),
+        "status": t.status,
+        "dispatch_status": t.dispatch_status,
+    } if t else None
+    f = db.get(FollowUp, a.followup_id) if a.followup_id else None
+    out["followup"] = (
+        {"id": f.id, "offset_minutes": f.offset_minutes, "due_at": iso(f.due_at), "retry_of": f.retry_of}
+        if f
+        else None
+    )
+    return out
+
+
 class SimAction(BaseModel):
-    action: str  # answer | press | silence | no_answer | busy | hangup
+    action: str  # answer | press | silence | no_answer | busy | hangup | handoff_result | handoff_failed
     digit: str | None = None
+    result: Annotated[ReminderResult | RatingResult, Field(discriminator="kind")] | None = None  # handoff_result
 
 
 @router.post("/simulator/calls/{call_id}")
@@ -58,10 +89,23 @@ def simulate(call_id: int, body: SimAction, db: Session = Depends(get_db)):
         elif body.action == "press":
             if a.status != "in_progress":
                 raise HTTPException(400, "Answer the call first")
-            step = ivr.press(db, a, (body.digit or "")[:1])
+            step = ivr.press(db, a, (body.digit or "")[:1], can_handoff=True)
             if step.repeat:
                 retry = ivr.next_prompt(db, a)
-                step = ivr.Step(step.text + " " + retry.text, hangup=retry.hangup)
+                step = ivr.Step(step.parts + retry.parts, hangup=retry.hangup)
+        elif body.action == "handoff_result":  # the voice agent finished and reported
+            if a.status != "handoff":
+                raise HTTPException(400, "The call is not with the voice agent")
+            if body.result is None:
+                raise HTTPException(400, "A result is needed")
+            try:
+                handoff.apply_result(db, a, body.result)
+            except ValueError as e:
+                raise HTTPException(400, str(e)) from e
+        elif body.action == "handoff_failed":  # the voice agent could not be reached
+            if a.status != "handoff":
+                raise HTTPException(400, "The call is not with the voice agent")
+            step = handoff.fallback(db, a)
         elif body.action == "silence":
             if a.status != "in_progress":
                 raise HTTPException(400, "Answer the call first")
@@ -75,5 +119,8 @@ def simulate(call_id: int, body: SimAction, db: Session = Depends(get_db)):
         if step and step.hangup:
             ivr.ended(db, a, "completed")
         db.commit()
-    return {"call": call_out(a), "spoken": step.text if step else None,
-            "max_prompts": get_settings().ivr_max_prompts}
+    return {
+        "call": call_out(a),
+        "spoken": step.text if step else None,
+        "max_prompts": get_settings().ivr_max_prompts,
+    }

@@ -136,6 +136,19 @@ class LiveExtraHandClient:
     def list_users(self, role: str, max_pages: int = 10) -> list[dict]:
         return self._paged("/users", {"role": role}, max_pages)
 
+    def list_users_since(self, role: str, since_iso: str, max_pages: int = 60) -> list[dict]:
+        """Users of a role newest first, reading pages only until a user registered before `since_iso`
+        (ISO-8601 UTC, compared as text like ExtraHand's createdAt)."""
+        out: list[dict] = []
+        for page in range(1, max_pages + 1):
+            resp = self._main("GET", "/users", params={"role": role, "page": page, "limit": self.page_size})
+            items = extract_list(resp)
+            out.extend(items)
+            created = [str(u.get("createdAt") or "") for u in items if isinstance(u, dict)]
+            if not items or (created and min(created) < since_iso) or not has_next_page(resp, page, len(items), self.page_size):
+                break
+        return out
+
     def search_helpers(self, q: str) -> list[dict]:
         return extract_list(self._main("GET", "/users/helpers/search", params={"q": q}))
 

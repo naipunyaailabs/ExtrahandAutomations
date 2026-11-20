@@ -1,0 +1,97 @@
+/* Home: all automation KPI cards in one grid (enterprise look) */
+.mg { display: flex; flex-direction: column; gap: 22px; }
+.mg-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
+
+.mg-card {
+  position: relative; isolation: isolate; display: flex; flex-direction: column; gap: 14px; padding: 18px 18px 14px;
+  border-radius: 18px; cursor: pointer; overflow: hidden;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--acc) 5%, transparent), transparent 42%),
+    var(--surface);
+  border: 1.5px solid color-mix(in srgb, var(--acc) 38%, var(--border));
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 10px 28px -18px color-mix(in srgb, var(--acc) 55%, transparent);
+  transition: border-color 0.25s, box-shadow 0.25s;
+}
+/* gradient hairline on top, like the reference */
+.mg-card::before {
+  content: ""; position: absolute; inset: 0 0 auto 0; height: 3px; z-index: 1;
+  background: linear-gradient(90deg, transparent, var(--acc) 30%, color-mix(in srgb, var(--acc) 60%, #fff) 70%, transparent);
+  opacity: 0.85;
+}
+.mg-card:hover {
+  border-color: color-mix(in srgb, var(--acc) 70%, var(--border));
+  box-shadow: 0 2px 4px rgba(15, 23, 42, 0.05), 0 22px 44px -22px color-mix(in srgb, var(--acc) 75%, transparent),
+    0 0 0 4px color-mix(in srgb, var(--acc) 9%, transparent);
+}
+.mg-card:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--acc) 45%, transparent); }
+.mg-card.attention { border-color: color-mix(in srgb, #ef4444 45%, var(--border)); }
+
+/* light sweep across the card on hover */
+.mg-shine {
+  position: absolute; inset: 0; z-index: 0; pointer-events: none; transform: translateX(-120%);
+  background: linear-gradient(105deg, transparent 35%, color-mix(in srgb, var(--acc) 10%, rgba(255, 255, 255, 0.55)) 50%, transparent 65%);
+}
+.mg-card:hover .mg-shine { transform: translateX(120%); transition: transform 0.9s ease; }
+.mg-card > :not(.mg-shine) { position: relative; z-index: 1; }
+
+.mg-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.mg-icon {
+  display: grid; place-items: center; width: 42px; height: 42px; border-radius: 12px; flex: none; color: var(--acc);
+  background: color-mix(in srgb, var(--acc) 11%, var(--surface)); border: 1px solid color-mix(in srgb, var(--acc) 32%, transparent);
+  box-shadow: 0 6px 14px -10px var(--acc); transition: transform 0.35s cubic-bezier(.2, .8, .2, 1.4);
+}
+.mg-card:hover .mg-icon { transform: rotate(-6deg) scale(1.08); }
+.mg-status {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 60%; padding: 4px 10px; border-radius: 999px;
+  font-size: 11px; font-weight: 700; color: var(--acc); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  background: color-mix(in srgb, var(--acc) 8%, var(--surface)); border: 1px solid color-mix(in srgb, var(--acc) 40%, transparent);
+}
+.mg-status svg { flex: none; }
+.mg-alert { width: 7px; height: 7px; border-radius: 50%; background: #ef4444; flex: none; animation: mg-blink 1.6s ease-in-out infinite; }
+@keyframes mg-blink { 50% { box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.25); } }
+
+.mg-title h3 { margin: 0; font-size: 17px; font-weight: 800; letter-spacing: -0.015em; color: var(--text); }
+.mg-title small { display: flex; align-items: center; gap: 6px; margin-top: 3px; font-size: 12px; font-weight: 600; color: var(--acc);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mg-title small i { width: 6px; height: 6px; border-radius: 50%; background: var(--acc); flex: none; }
+
+.mg-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.mg-metric {
+  container-type: inline-size; display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 10px 11px; border-radius: 11px;
+  background: color-mix(in srgb, var(--text) 2.5%, var(--surface)); border: 1px solid var(--border);
+  transition: border-color 0.2s, background 0.2s;
+}
+.mg-card:hover .mg-metric { border-color: color-mix(in srgb, var(--acc) 22%, var(--border)); }
+.mg-label { font-size: 9.5px; font-weight: 800; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mg-value { font-size: clamp(15px, 17cqi, 22px); font-weight: 800; letter-spacing: -0.02em; line-height: 1.1; color: var(--acc); }
+.mg-metric.tone-good .mg-value { color: #16a34a; }
+.mg-metric.tone-warn .mg-value { color: #d97706; }
+.mg-metric.tone-bad .mg-value { color: #dc2626; }
+.mg-note { font-size: 10.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* action: a soft link row; Calling and WhatsApp get filled buttons */
+.mg-foot { margin-top: auto; padding-top: 12px; border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent); }
+.mg-action {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; margin: 0 -10px; box-sizing: content-box;
+  border-radius: 10px; font-size: 12.5px; font-weight: 700; color: var(--acc); transition: background 0.2s, color 0.2s;
+}
+.mg-action-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mg-action-arrow { flex: none; transition: transform 0.25s; }
+.mg-card:hover .mg-action:not(.primary) { background: color-mix(in srgb, var(--acc) 8%, transparent); }
+.mg-card:hover .mg-action-arrow { transform: translateX(4px); }
+
+.mg-action.primary {
+  box-sizing: border-box; margin: 0; height: 40px; padding: 0 12px 0 6px; border-radius: 11px; color: #fff;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--acc) 88%, #fff), var(--acc) 55%, color-mix(in srgb, var(--acc) 80%, #000));
+  box-shadow: 0 10px 20px -12px var(--acc), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+.mg-action-icon { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; flex: none; background: rgba(255, 255, 255, 0.2); }
+.mg-card:hover .mg-action.primary { box-shadow: 0 14px 26px -12px var(--acc), inset 0 1px 0 rgba(255, 255, 255, 0.3); filter: brightness(1.05); }
+
+@media (max-width: 1280px) { .mg-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 760px) { .mg-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (prefers-reduced-motion: reduce) {
+  .mg-card:hover .mg-shine { transform: translateX(-120%); transition: none; }
+  .mg-alert { animation: none; }
+}

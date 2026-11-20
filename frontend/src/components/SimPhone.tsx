@@ -1,13 +1,23 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, Hand, PhoneIncoming, PhoneMissed, PhoneOff, Volume2, X } from "lucide-react";
+import { Bot, Check, Hand, PhoneIncoming, PhoneMissed, PhoneOff, Volume2, X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
-import { humanize } from "../format";
+import { callKind, humanize } from "../format";
 import type { Call } from "../types";
 import { Avatar, Button, Pill, useToast } from "./ui";
 
 const POSITIVE = new Set(["accepted", "confirmed"]);
+const MIXED = new Set(["running_late"]); // neither a success nor a failure
+
+/** What the voice agent would report after talking to the person (the simulator plays her side). */
+const MAYA = {
+  cannotCome: { kind: "reminder", decision: "cannot_come", reason: "Not well", summary: "Helper says they cannot come (simulated)." },
+  runningLate: { kind: "reminder", decision: "running_late", eta_minutes: 30, reason: "Stuck in traffic",
+    summary: "Helper is running late, about 30 more minutes (simulated)." },
+  complaint: { kind: "rating", complaint_category: "late_arrival", details: "Helper arrived late",
+    summary: "Customer says the helper arrived late (simulated)." },
+};
 
 /**
  * One live call. For simulated calls this is the helper's handset: answer it,
@@ -23,10 +33,10 @@ export function SimPhone({ call, maxPrompts, onChange, onEnded }: {
   const simulated = call.provider === "simulator";
   const ended = call.status === "ended";
 
-  const act = async (action: string, digit?: string) => {
+  const act = async (action: string, digit?: string, result?: unknown) => {
     setBusy(true);
     try {
-      const res = await api.simulate(call.id, action, digit);
+      const res = await api.simulate(call.id, action, digit, result);
       setSpoken(res.spoken);
       setSeq((n) => n + 1);
       if (res.call.status === "ended") onEnded?.(res.call);
@@ -40,9 +50,11 @@ export function SimPhone({ call, maxPrompts, onChange, onEnded }: {
 
   const agentLine = spoken ?? (call.status === "in_progress" ? call.script : null);
   const isOffer = call.purpose === "dispatch";
+  const isRating = call.purpose === "feedback";
+  const who = isRating ? (call.customer_name ?? "Customer") : (call.helper_name ?? "Helper");
 
   return (
-    <div className={`phone phone-${call.status} ${ended ? (POSITIVE.has(call.outcome ?? "") ? "phone-good" : "phone-bad") : ""}`}>
+    <div className={`phone phone-${call.status} ${ended ? (POSITIVE.has(call.outcome ?? "") ? "phone-good" : MIXED.has(call.outcome ?? "") ? "phone-mixed" : "phone-bad") : ""}`}>
       <div className="phone-head">
         <div className="phone-avatar">
           {call.status === "ringing" && (
@@ -52,14 +64,14 @@ export function SimPhone({ call, maxPrompts, onChange, onEnded }: {
               <span className="ripple r3" />
             </>
           )}
-          <Avatar name={call.helper_name} size={44} />
+          <Avatar name={who} size={44} />
         </div>
         <div className="phone-who">
-          <div className="phone-name">{call.helper_name ?? "Helper"}</div>
+          <div className="phone-name">{who}</div>
           <div className="mono small muted">{call.phone}</div>
         </div>
         <div className="phone-tags">
-          <Pill value={isOffer ? "new" : "scheduled"} label={isOffer ? "Task offer" : "Reminder"} />
+          <Pill value={isOffer ? "new" : "scheduled"} label={callKind(call.purpose)} />
           {call.status === "in_progress" ? <CallTimer since={call.answered_at} /> :
             <Pill value={ended ? call.outcome : call.status} label={call.status === "ringing" ? "Ringing" : undefined} />}
         </div>
@@ -81,6 +93,17 @@ export function SimPhone({ call, maxPrompts, onChange, onEnded }: {
         </div>
       )}
 
+      {call.status === "handoff" && (
+        <div className="agent-line">
+          <Bot size={14} className="muted" />
+          <span>
+            {simulated
+              ? "Connected to Maya, the voice agent. Use the buttons to play what she reports back."
+              : "Connected to Maya, the voice agent. What she records appears here when the call ends."}
+          </span>
+        </div>
+      )}
+
       {agentLine && !ended && (
         <div className="agent-line">
           {call.status === "in_progress" && <Waveform />}
@@ -98,7 +121,27 @@ export function SimPhone({ call, maxPrompts, onChange, onEnded }: {
               <Button variant="ghost" disabled={busy} onClick={() => act("busy")}>Busy</Button>
             </>
           )}
-          {call.status === "in_progress" && (
+          {call.status === "handoff" && (
+            <>
+              {!isRating && <Button disabled={busy} onClick={() => act("handoff_result", undefined, MAYA.cannotCome)}>Maya: can't come</Button>}
+              {!isRating && <Button disabled={busy} onClick={() => act("handoff_result", undefined, MAYA.runningLate)}>Maya: running late 30 min</Button>}
+              {isRating && <Button disabled={busy} onClick={() => act("handoff_result", undefined, MAYA.complaint)}>Maya: complaint</Button>}
+              <Button variant="ghost" size="sm" disabled={busy} onClick={() => act("handoff_failed")}>Maya unreachable</Button>
+              <Button variant="ghost" size="sm" icon={PhoneOff} disabled={busy} onClick={() => act("hangup")}>Hang up</Button>
+            </>
+          )}
+          {call.status === "in_progress" && isRating && (
+            <>
+              <Key digit="1" tone="reject" disabled={busy} onPress={() => act("press", "1")}>1 star</Key>
+              <Key digit="2" tone="reject" disabled={busy} onPress={() => act("press", "2")}>2 stars</Key>
+              <Key digit="3" disabled={busy} onPress={() => act("press", "3")}>3 stars</Key>
+              <Key digit="5" tone="accept" disabled={busy} onPress={() => act("press", "5")}>5 stars</Key>
+              <Key digit="9" disabled={busy} onPress={() => act("press", "9")}>Call me later</Key>
+              <Button variant="ghost" size="sm" icon={Hand} disabled={busy} onClick={() => act("silence")}>Stay silent</Button>
+              <Button variant="ghost" size="sm" icon={PhoneOff} disabled={busy} onClick={() => act("hangup")}>Hang up</Button>
+            </>
+          )}
+          {call.status === "in_progress" && !isRating && (
             <>
               <Key digit="1" tone="accept" disabled={busy} onPress={() => act("press", "1")}>{isOffer ? "Accept" : "Confirm"}</Key>
               <Key digit="2" tone="reject" disabled={busy} onPress={() => act("press", "2")}>{isOffer ? "Reject" : "Can't attend"}</Key>
@@ -111,7 +154,7 @@ export function SimPhone({ call, maxPrompts, onChange, onEnded }: {
       )}
       {!ended && !simulated && <div className="small muted">Live {call.provider} call. Updates arrive from the phone network.</div>}
 
-      <AnimatePresence>{ended && <Outcome outcome={call.outcome} />}</AnimatePresence>
+      <AnimatePresence>{ended && <Outcome outcome={call.outcome} note={call.handoff ? call.summary : null} />}</AnimatePresence>
     </div>
   );
 }
@@ -171,15 +214,17 @@ function CallTimer({ since }: { since: string | null }) {
   );
 }
 
-function Outcome({ outcome }: { outcome: string | null }) {
+function Outcome({ outcome, note }: { outcome: string | null; note?: string | null }) {
   const good = POSITIVE.has(outcome ?? "");
+  const mixed = MIXED.has(outcome ?? "");
   return (
-    <motion.div className={`outcome ${good ? "good" : "bad"}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+    <motion.div className={`outcome ${good ? "good" : mixed ? "mixed" : "bad"}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
       <motion.div className="outcome-badge" initial={{ scale: 0.3, rotate: -20 }} animate={{ scale: 1, rotate: 0 }}
         transition={{ type: "spring", stiffness: 420, damping: 14 }}>
-        {good ? <Check size={28} strokeWidth={3} /> : <X size={28} strokeWidth={3} />}
+        {good ? <Check size={28} strokeWidth={3} /> : mixed ? <Hand size={26} strokeWidth={2.6} /> : <X size={28} strokeWidth={3} />}
       </motion.div>
       <div className="outcome-text">{humanize(outcome)}</div>
+      {note && <div className="outcome-note">{note}</div>}
       {good && <Confetti />}
     </motion.div>
   );

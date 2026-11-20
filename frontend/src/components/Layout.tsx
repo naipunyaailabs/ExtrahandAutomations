@@ -2,6 +2,7 @@ import { AnimatePresence, motion, useAnimationControls } from "framer-motion";
 import {
   AlertOctagon,
   Check,
+
   LogOut,
   Moon,
   RefreshCw,
@@ -29,56 +30,18 @@ export function Layout({ children }: { children: ReactNode }) {
 
   return (
     <div className="shell-no-sidebar">
-      <header className="topbar">
-        {/* Left: Logo + Brand */}
-        <NavLink to="/" className="topbar-brand topbar-brand-always" aria-label="Home">
-          <LogoMark size={28} />
+      <header className="topbar topbar-v2">
+        <NavLink to="/home" className="topbar-brand topbar-brand-always" aria-label="Home">
+          <LogoMark size={30} />
           <Wordmark />
         </NavLink>
 
-        {/* Center: Sync status */}
-        <div className="sync-info">
-          {stats?.last_sync.at ? (
-            <>
-              <span className={`dot pulse ${stats.last_sync.ok ? "success" : "danger"}`} />
-              Last sync {fmtRelative(stats.last_sync.at)}
-              {!stats.last_sync.ok && stats.last_sync.error && (
-                <span className="error-inline" title={stats.last_sync.error}>
-                  {" "}·{" "}
-                  {stats.last_sync.error.includes("version") || stats.last_sync.error.includes("No matching document")
-                    ? "Temporary server collision (retrying automatically)"
-                    : stats.last_sync.error.length > 60
-                    ? `${stats.last_sync.error.slice(0, 60)}...`
-                    : stats.last_sync.error}
-                </span>
-              )}
-            </>
-          ) : (
-            <span className="muted">Not synced yet</span>
-          )}
-        </div>
-
-        {/* Right: actions */}
         <div className="topbar-actions">
+          <SyncChip stats={stats} />
           {config?.runtime?.emergency_stop_calls && (
-            <NavLink
-              to="/settings"
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "0.4rem",
-                background: "rgba(239, 68, 68, 0.2)",
-                border: "1px solid #ef4444",
-                color: "#dc2626",
-                padding: "0.3rem 0.75rem",
-                borderRadius: "6px",
-                fontSize: "0.78rem",
-                fontWeight: 700,
-                textDecoration: "none",
-              }}
-            >
+            <NavLink to="/settings" className="hdr-alert" title="Emergency stop is on: no calls are placed. Open Settings to resume.">
               <AlertOctagon size={14} />
-              <span>CALLS STOPPED</span>
+              <span>Calls stopped</span>
             </NavLink>
           )}
           <ThemeButton />
@@ -117,18 +80,66 @@ export function ThemeButton() {
   );
 }
 
+/** Last ExtraHand sync as a compact chip; the error (if any) is in the tooltip. */
+function SyncChip({ stats }: { stats: Stats | null | undefined }) {
+  const at = stats?.last_sync.at;
+  const ok = stats?.last_sync.ok !== false;
+  const err = stats?.last_sync.error ?? "";
+  const friendly = err.includes("version") || err.includes("No matching document")
+    ? "Temporary server collision (retrying automatically)" : err;
+  return (
+    <span className={`hdr-sync ${!at ? "is-idle" : ok ? "is-ok" : "is-bad"}`} title={at ? (ok ? "ExtraHand sync is healthy" : friendly) : "Waiting for the first sync"}>
+      <span className="hdr-sync-dot" />
+      {at ? <>{ok ? "Synced" : "Sync failed"} <b>{fmtRelative(at)}</b></> : "Not synced yet"}
+    </span>
+  );
+}
+
 export function UserChip() {
   const { user, logout } = useAuth();
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", close); document.removeEventListener("keydown", esc); };
+  }, [open]);
   if (!user) return null;
+  const initials = (user.name || "U").split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase();
   return (
-    <div className="user-topbar-profile">
-      <div className="user-avatar-badge">
-        <User size={14} />
-      </div>
-      <div className="user-topbar-info">
-        <span className="user-topbar-name">{user.name}</span>
-        <span className="user-topbar-role">{user.role}</span>
-      </div>
+    <div className="user-topbar-profile" ref={box}>
+      <button type="button" className="user-account-btn" onClick={() => setOpen((v) => !v)} aria-haspopup="menu" aria-expanded={open}
+        title="Your account">
+        <span className="user-avatar-badge" aria-hidden>{initials || <User size={14} />}</span>
+        <span className="user-topbar-info">
+          <span className="user-topbar-name">{user.name}</span>
+          <span className="user-topbar-role">{user.role}</span>
+        </span>
+      </button>
+      {open && (
+        <div className="user-menu" role="menu">
+          <div className="user-menu-head">
+            <span className="user-avatar-badge lg" aria-hidden>{initials || <User size={16} />}</span>
+            <div>
+              <b>{user.name}</b>
+              <small>{user.email}</small>
+            </div>
+          </div>
+          <div className="user-menu-rows">
+            <div><span>Role</span><b className="user-menu-role">{user.role}</b></div>
+            <div><span>Access</span><b>{user.auth_enabled ? "Full access to every module" : "Local development (no login)"}</b></div>
+          </div>
+          <div className="user-menu-actions">
+            <NavLink to="/settings" className="user-menu-item" role="menuitem" onClick={() => setOpen(false)}><Settings size={15} /> Settings</NavLink>
+            {user.auth_enabled && (
+              <button type="button" className="user-menu-item danger" role="menuitem" onClick={logout}><LogOut size={15} /> Sign out</button>
+            )}
+          </div>
+        </div>
+      )}
       <NavLink
         to="/settings"
         className="icon-btn settings-topbar-btn"

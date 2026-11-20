@@ -1,46 +1,103 @@
 import { AnimatePresence, motion } from "framer-motion";
 import {
-  BellRing, Check, ChevronDown, ClipboardList, Code2, ExternalLink, History, Hourglass, LifeBuoy, MapPin, PhoneCall,
-  PhoneOff, PhoneOutgoing, Square, UserRound, Users, X,
+  ArrowLeft, BadgeCheck, BellRing, Calendar, ChevronDown, Code2, ExternalLink, History,
+  Hourglass, IndianRupee, LifeBuoy, MapPin, PhoneCall, PhoneOutgoing, Square, UserRound,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
 import { useConfig } from "../components/Layout";
 import { LiveCalls } from "../components/LiveCalls";
 import { itemVariants, Stagger } from "../components/motion";
 import { Timeline } from "../components/Timeline";
-import { Avatar, Button, Card, Empty, ErrorNote, Field, Phone, Pill, SkeletonPage, toneOf, useToastAction } from "../components/ui";
-import { usePoll } from "../hooks";
-import { fmtDateTime, fmtMoney, fmtOffset, fmtRelative, fmtTime, humanize } from "../format";
-import type { Call, DispatchRun } from "../types";
+import { Avatar, Button, Card, Empty, ErrorNote, Phone, Pill, SkeletonPage, toneOf, useToastAction } from "../components/ui";
+import { usePoll, useGoBack } from "../hooks";
+import { TaskHelpersTable, useHelperRows } from "../components/TaskHelpersTable";
+import { fmtDateTime, fmtMoney, fmtOffset, fmtRelative, fmtSlot, fmtTime, humanize } from "../format";
+import type { TicketDetail as TicketDetailType } from "../types";
 
+/* ------------------------------------------------------------------------------------------------ helpers */
+
+const istDay = (iso: string | Date) => new Date(iso).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+
+/** Where the task stands by date: today / upcoming / overdue / completed (same rules as the task list). */
+/** Who assigned the helper and whether ExtraHand has it. */
+function assignedNote(t: TicketDetailType): string {
+  const via = t.assigned_via || (t.assignment_local_only ? "call" : "extrahand");
+  if (via === "extrahand") return "assigned on ExtraHand";
+  const how = via === "whatsapp" ? "accepted on WhatsApp" : "accepted on our AI call";
+  if (!t.assignment_local_only || t.extrahand_push === "ok") return `${how} · updated on ExtraHand`;
+  if (t.extrahand_push === "failed") return `${how} · NOT on ExtraHand (${t.extrahand_push_error || "update failed"})`;
+  if (t.extrahand_push === "pending") return `${how} · updating ExtraHand…`;
+  return `${how} · this app only`;
+}
+
+function dateBucket(t: TicketDetailType): { key: string; label: string; tone: string } {
+  const closed = ["completed", "cancelled", "closed"].includes((t.status ?? "").toLowerCase());
+  const when = t.scheduled_at ?? t.booked_at ?? t.created_at ?? null;
+  const today = istDay(new Date());
+  const day = when ? istDay(when) : today;
+  if (day === today) return { key: "today", label: "Today", tone: "success" };
+  if (day > today) return { key: "upcoming", label: "Upcoming", tone: "warn" };
+  return closed ? { key: "done", label: "Completed", tone: "neutral" } : { key: "overdue", label: "Overdue", tone: "danger" };
+}
+
+/* ------------------------------------------------------------------------------------------------ page */
+
+/** The task page route: /tickets/:id */
 export default function TicketDetail() {
+  const goBack = useGoBack("/calling/tasks");
   const { id = "" } = useParams();
+  return <TaskDetailView id={id} onBack={goBack} />;
+}
+
+interface TaskDetailViewProps {
+  id: string;
+  onBack: () => void;
+  backLabel?: string;
+  /** Section shown between the task and the helpers table (e.g. the WhatsApp message on WhatsApp > Send Work Order). */
+  extra?: ReactNode;
+  /** Extra button(s) per helper row, e.g. Direct Chat. */
+  helperAction?: (h: { id: string; name: string; phone: string | null }) => ReactNode;
+}
+
+/** Task + its helpers (WhatsApp, call status, pressed key, reply). Used by the task page and by WhatsApp. */
+export function TaskDetailView({ id, onBack, backLabel = "Back", extra, helperAction }: TaskDetailViewProps) {
   const config = useConfig()!;
-  const { data: t, error, refresh } = usePoll(() => api.ticket(id), 2500, [id]);
+  const { data: t, error, refresh } = usePoll(() => api.ticket(id), 3000, [id]);
+  const { data: matched } = usePoll(() => api.whatsapp.taskCandidates(id), 30000, [id]);
   const action = useToastAction();
   const [showRaw, setShowRaw] = useState(false);
 
+  const { counts } = useHelperRows(t, matched);
+
   if (!t) return error ? <div className="page"><ErrorNote error={error} /></div> : <SkeletonPage />;
+
 
   const activeCalls = t.calls.filter((c) => c.status !== "ended").map((c) => ({ ...c, ticket_title: t.title ?? undefined }));
   const running = t.runs.find((r) => r.status === "running");
+  const bucket = dateBucket(t);
 
   return (
-    <Stagger className="page">
+    <Stagger className="page td-page">
+      {/* ------------------------------------------------------------------ TASK (top) */}
       <motion.div variants={itemVariants}>
-        <div className="crumbs"><Link to="/tickets">Tickets</Link> / <span className="mono">{t.id}</span></div>
-        <div className="page-head row">
-          <div>
-            <h1>{t.title ?? "Untitled booking"}</h1>
-            <div className="head-meta">
+        <button type="button" className="td-back" onClick={onBack}><ArrowLeft size={15} /> {backLabel}</button>
+      </motion.div>
+
+      <motion.section variants={itemVariants} className={`td-hero td-hero-${bucket.key}`}>
+        <div className="td-hero-top">
+          <div className="td-hero-title">
+            <div className="td-hero-tags">
+              <span className="task-category-tag">{t.category ?? "Service"}</span>
+              <span className={`pill tone-${bucket.tone}`}><span className="pill-dot" />{bucket.label}</span>
               <Pill value={t.dispatch_status} label={t.dispatch_status === "escalated" ? "customer care" : undefined} />
-              <span className="muted">ExtraHand: {t.status ?? "—"}</span>
-              <span className="muted">Synced {fmtRelative(t.synced_at)}</span>
+              <span className="td-muted-chip">ExtraHand: {t.status ?? "—"}</span>
             </div>
+            <h1>{t.title ?? "Untitled booking"}</h1>
+            <div className="td-sub mono">#{t.id} · synced {fmtRelative(t.synced_at)}</div>
           </div>
-          <div className="actions">
+          <div className="td-actions">
             {t.dispatch_status === "new" && (
               <Button variant="primary" icon={PhoneOutgoing} loading={action.busy}
                 onClick={() => action.run(async () => { await api.dispatch(t.id); await refresh(); })}>
@@ -53,74 +110,59 @@ export default function TicketDetail() {
                 Stop calling
               </Button>
             )}
-            {t.dispatch_status === "escalated" && <Link className="btn btn-secondary btn-md" to="/customer-care"><LifeBuoy size={15} />Open in customer care</Link>}
+            {t.dispatch_status === "escalated" && (
+              <Link className="btn btn-secondary btn-md" to="/calling/care"><LifeBuoy size={15} />Open in customer care</Link>
+            )}
           </div>
         </div>
-      </motion.div>
 
-      <div className="grid-3">
-        <Card title="Booking" icon={ClipboardList}>
-          <dl className="fields">
-            <Field label="Service">{t.category ?? "—"}</Field>
-            <Field label="Scheduled">
-              {t.scheduled_at ? (
-                <>
-                  {fmtDateTime(t.scheduled_at)}{" "}
-                  <span className="muted small">({fmtRelative(t.scheduled_at)})</span>
-                </>
-              ) : (
-                <span className="badge-flexible">Flexible timing (coordinate on call)</span>
-              )}
-            </Field>
-            <Field label="Amount">
-              <span className="amount">
-                {t.budget && t.budget > 0 ? (
-                  fmtMoney(t.budget)
-                ) : (
-                  <span className="badge-negotiable">Negotiable / Open</span>
-                )}
-              </span>
-            </Field>
-            <Field label="Source">{t.booking_source ?? "—"}</Field>
-            {t.description && <Field label="Notes">{t.description}</Field>}
-          </dl>
-        </Card>
-        <Card title="Customer & location" icon={MapPin}>
-          <dl className="fields">
-            <Field label="Customer">{t.customer.name ?? "—"}</Field>
-            <Field label="Phone"><Phone value={t.customer.phone} /></Field>
-            {t.customer.email && <Field label="Email">{t.customer.email}</Field>}
-            <Field label="Address">{t.address ?? "—"}{t.city && <div className="muted small">{t.city}</div>}</Field>
-            {t.lat != null && t.lng != null && (
-              <Field label="GPS">
-                <a href={`https://maps.google.com/?q=${t.lat},${t.lng}`} target="_blank" rel="noreferrer" className="mono small link-icon">
-                  {t.lat.toFixed(4)}, {t.lng.toFixed(4)} <ExternalLink size={12} />
+        <div className="td-facts">
+          <div className="td-fact">
+            <span className="td-fact-label"><Calendar size={13} /> Schedule</span>
+            <span className="td-fact-value">{fmtSlot(t.scheduled_at, t.scheduled_end_at)}</span>
+            <span className="td-fact-note">
+              {t.scheduled_at ? `starts ${fmtRelative(t.scheduled_at)}` : "coordinate on call"}
+              {(t.booked_at || t.created_at) && <> · booked {fmtDateTime(t.booked_at || t.created_at)}</>}
+            </span>
+          </div>
+          <div className="td-fact">
+            <span className="td-fact-label"><IndianRupee size={13} /> Budget</span>
+            <span className="td-fact-value td-money">{t.budget && t.budget > 0 ? fmtMoney(t.budget) : "Negotiable"}</span>
+            <span className="td-fact-note">{t.booking_source ? humanize(t.booking_source) : "—"}</span>
+          </div>
+          <div className="td-fact">
+            <span className="td-fact-label"><UserRound size={13} /> Customer</span>
+            <span className="td-fact-value">{t.customer.name ?? "—"}</span>
+            <span className="td-fact-note"><Phone value={t.customer.phone} /></span>
+          </div>
+          <div className="td-fact td-fact-wide">
+            <span className="td-fact-label"><MapPin size={13} /> Location</span>
+            <span className="td-fact-value truncate" title={t.address ?? ""}>{t.city || t.address || "—"}</span>
+            <span className="td-fact-note truncate" title={t.address ?? ""}>
+              {t.lat != null && t.lng != null ? (
+                <a href={`https://maps.google.com/?q=${t.lat},${t.lng}`} target="_blank" rel="noreferrer" className="link-icon">
+                  {t.address && t.address !== t.city ? t.address : "Open in Maps"} <ExternalLink size={11} />
                 </a>
-              </Field>
+              ) : (t.address && t.address !== t.city ? t.address : "—")}
+            </span>
+          </div>
+          <div className="td-fact td-fact-helper">
+            <span className="td-fact-label"><BadgeCheck size={13} /> Assigned helper</span>
+            {t.assignee ? (
+              <>
+                <span className="td-fact-value td-assigned"><Avatar name={t.assignee.name} size={22} /> {t.assignee.name ?? t.assignee.id}</span>
+                <span className="td-fact-note"><Phone value={t.assignee.phone} /> · {assignedNote(t)}</span>
+              </>
+            ) : (
+              <>
+                <span className="td-fact-value td-unassigned">{t.dispatch_status === "dispatching" ? "Calling helpers…" : "Not assigned yet"}</span>
+                <span className="td-fact-note">{counts.accepted ? `${counts.accepted} accepted` : `${counts.called} of ${counts.all} called`}</span>
+              </>
             )}
-          </dl>
-        </Card>
-        <Card title="Helper" icon={UserRound}>
-          {t.assignee ? (
-            <div className="helper-card">
-              <Avatar name={t.assignee.name} size={44} />
-              <dl className="fields">
-                <Field label="Name">{t.assignee.name ?? t.assignee.id}</Field>
-                <Field label="Phone"><Phone value={t.assignee.phone} /></Field>
-                <Field label="Assignment">
-                  {t.assignment_local_only
-                    ? <span className="warn-text">Accepted on our call. Not pushed to ExtraHand (assignment API off).</span>
-                    : "On ExtraHand"}
-                </Field>
-              </dl>
-            </div>
-          ) : (
-            <Empty icon={t.dispatch_status === "dispatching" ? PhoneCall : UserRound}>
-              {t.dispatch_status === "dispatching" ? "Calling helpers…" : "No helper assigned."}
-            </Empty>
-          )}
-        </Card>
-      </div>
+          </div>
+        </div>
+        {t.description && <p className="td-notes">{t.description}</p>}
+      </motion.section>
 
       <AnimatePresence initial={false}>
         {activeCalls.length > 0 && (
@@ -149,35 +191,34 @@ export default function TicketDetail() {
         </Card>
       )}
 
+      {extra && <motion.div variants={itemVariants}>{extra}</motion.div>}
+
+      {/* ------------------------------------------------------------------ HELPERS (below) */}
+      <TaskHelpersTable t={t} matched={matched} action={helperAction} />
+
+      {/* ------------------------------------------------------------------ reminders + timeline */}
       <div className="grid-2">
-        <Card title="Helper calls" icon={Users}>
-          {t.runs.length ? t.runs.map((r) => <RunView key={r.id} run={r} calls={t.calls} />) : (
-            <Empty icon={Users}>No helpers called yet.</Empty>
+        <Card title="Reminder calls" icon={BellRing}>
+          {t.followups.length ? (
+            <ul className="reminders">
+              {t.followups.map((f) => (
+                <li key={f.id} className={`tone-${toneOf(f.outcome ?? f.status)}`}>
+                  <span className="reminder-offset">{fmtOffset(f.offset_minutes)}</span>
+                  <div>
+                    <div>{f.helper_name}</div>
+                    <div className="small muted">{fmtDateTime(f.due_at)} · {fmtRelative(f.due_at)}</div>
+                  </div>
+                  <Pill value={f.outcome ?? f.status} />
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <Empty icon={BellRing}>{t.assignee ? "No reminders (task too soon or no start time)." : "Scheduled once a helper is assigned."}</Empty>
           )}
         </Card>
-        <div className="stack">
-          <Card title="Reminder calls" icon={BellRing}>
-            {t.followups.length ? (
-              <ul className="reminders">
-                {t.followups.map((f) => (
-                  <li key={f.id} className={`tone-${toneOf(f.outcome ?? f.status)}`}>
-                    <span className="reminder-offset">{fmtOffset(f.offset_minutes)}</span>
-                    <div>
-                      <div>{f.helper_name}</div>
-                      <div className="small muted">{fmtDateTime(f.due_at)} · {fmtRelative(f.due_at)}</div>
-                    </div>
-                    <Pill value={f.outcome ?? f.status} />
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <Empty icon={BellRing}>{t.assignee ? "No reminders (task too soon or no start time)." : "Scheduled once a helper is assigned."}</Empty>
-            )}
-          </Card>
-          <Card title="Timeline" icon={History}>
-            <Timeline events={t.events} time={fmtTime} />
-          </Card>
-        </div>
+        <Card title="Timeline" icon={History}>
+          {t.events.length ? <Timeline events={t.events} time={fmtTime} /> : <Empty icon={Hourglass}>Nothing has happened on this task yet.</Empty>}
+        </Card>
       </div>
 
       <motion.div variants={itemVariants}>
@@ -195,54 +236,5 @@ export default function TicketDetail() {
         </AnimatePresence>
       </motion.div>
     </Stagger>
-  );
-}
-
-const RESULT_ICON: Record<string, typeof Check> = { accepted: Check, confirmed: Check };
-
-function RunView({ run, calls }: { run: DispatchRun; calls: Call[] }) {
-  const byHelper = new Map<string, Call>();
-  for (const c of calls) if (c.run_id === run.id && c.helper_id) byHelper.set(c.helper_id, c);
-
-  return (
-    <div className="run">
-      <div className="run-head">
-        <span>Run #{run.id} · {fmtDateTime(run.started_at)} · {humanize(run.candidate_source)}</span>
-        <Pill value={run.status} />
-      </div>
-      {run.reason && <div className="small muted">{run.reason}</div>}
-      {run.candidates.length === 0 ? (
-        <Empty icon={Users}>No eligible helpers found.</Empty>
-      ) : (
-        <ol className="stepper">
-          {run.candidates.map((c, i) => {
-            const call = byHelper.get(c.helper_id);
-            const current = i === run.current_index && run.status === "running";
-            const result = call?.outcome ?? null;
-            const waiting = !call && i > run.current_index;
-            const Icon = result ? RESULT_ICON[result] ?? X : current ? PhoneCall : waiting ? Hourglass : PhoneOff;
-            return (
-              <li key={c.helper_id} className={`step ${current ? "current" : ""} ${waiting ? "waiting" : ""} tone-${toneOf(result ?? (current ? "calling" : "closed"))}`}>
-                {current && <span className="step-shimmer" />}
-                <motion.span key={result ?? (current ? "cur" : "idle")} className="step-icon"
-                  initial={{ scale: 0.4, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ type: "spring", stiffness: 500, damping: 18 }}>
-                  <Icon size={13} strokeWidth={2.5} />
-                </motion.span>
-                <div className="step-main">
-                  <div>{c.name ?? c.helper_id} <span className="mono small muted">{c.phone}</span></div>
-                  <div className="small muted">
-                    {c.distance_km != null ? `${c.distance_km} km away` : "distance unknown"}
-                    {c.skills.length > 0 && ` · ${c.skills.join(", ")}`}
-                    {call && call.prompts_played > 0 && ` · message played ${call.prompts_played}×`}
-                    {call?.error && ` · ${call.error}`}
-                  </div>
-                </div>
-                {waiting ? <span className="small muted">queued</span> : <Pill value={result ?? call?.status ?? null} />}
-              </li>
-            );
-          })}
-        </ol>
-      )}
-    </div>
   );
 }

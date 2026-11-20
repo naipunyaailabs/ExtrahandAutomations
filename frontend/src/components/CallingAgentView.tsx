@@ -5,7 +5,6 @@ import {
   CheckCircle2,
   Clock,
   History,
-  Layers,
   LifeBuoy,
   MapPin,
   PhoneCall,
@@ -15,17 +14,16 @@ import {
   ShieldCheck,
   Sparkles,
   Ticket,
-  User,
   Users,
   Wrench,
   XCircle,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { Link, useLocation, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api";
-import { usePoll } from "../hooks";
+import { usePoll, useUrlState } from "../hooks";
 import { LiveCalls } from "./LiveCalls";
-import { Card, Empty, SkeletonRows, Tabs, Phone as PhoneText } from "./ui";
+import { Card, Empty, SkeletonRows, Phone as PhoneText } from "./ui";
 import { AnimatedNumber } from "./motion";
 import { fmtDateTime, fmtMoney, fmtRelative } from "../format";
 import {
@@ -34,9 +32,11 @@ import {
   getCanonicalLocations,
   formatHelperDisplayLocation,
 } from "../helperTaxonomy";
-import { EscalationCard } from "../pages/CustomerCare";
+import { CustomerCareView } from "../pages/CustomerCare";
 import { CallingDispatchFlow } from "./CallingDispatchFlow";
-import type { Call, Escalation, EventItem, FollowUp, Helper, Stats, Ticket as TicketType } from "../types";
+import { CallingAgentToggle } from "./CallingAgentToggle";
+import type { Call, Escalation, EventItem, Helper, Stats, Ticket as TicketType } from "../types";
+import { TaskBoard } from "./TaskBoard";
 
 interface CallingAgentViewProps {
   stats?: Stats;
@@ -51,6 +51,36 @@ interface CallingAgentViewProps {
   onRefreshAll: () => void;
   initialView?: "console" | "tickets" | "helpers" | "care" | "dispatch";
 }
+
+/** ExtraHand profile states that mean the helper cannot take work yet. */
+const BLOCKED_HELPER_STATUS: Record<string, string> = {
+  rejected: "Application rejected",
+  pending_review: "Pending review",
+  not_applied: "Not applied",
+  suspended: "Suspended",
+  blocked: "Blocked",
+};
+
+/** Why a helper cannot be dispatched right now, or null when they can. */
+const helperBlockReason = (h: Helper): string | null => {
+  const st = (h.status || "").toLowerCase().replace(/\s+/g, "_");
+  if (BLOCKED_HELPER_STATUS[st]) return BLOCKED_HELPER_STATUS[st];
+  if (!h.is_active) return "Inactive";
+  if (!h.can_accept_tasks) return "Not accepting tasks";
+  if (!h.phone) return "No phone number";
+  return null;
+};
+
+/** Each helper is in exactly one bucket: assigned (has open work), available, or not available. */
+const helperAvailability = (h: Helper): "assigned" | "available" | "not_available" => {
+  if ((h.active_tickets_count ?? 0) > 0) return "assigned";
+  return helperBlockReason(h) ? "not_available" : "available";
+};
+
+const helperShift = (h: Helper): "full_time" | "part_time" | "unset" => {
+  const v = (h.work_shift_type || "").toLowerCase().replace(/[\s-]+/g, "_");
+  return v === "full_time" ? "full_time" : v === "part_time" ? "part_time" : "unset";
+};
 
 export function CallingAgentView({
   stats: _stats,
@@ -105,11 +135,13 @@ export function CallingAgentView({
     isCareInitial ? "care" : isHelpersInitial ? "helpers" : "tasks"
   );
 
+  const navigate = useNavigate();
+  // A real route change (not window.history), so the sidebar, reload and Back all follow the section
   const switchSection = (sec: "tasks" | "helpers" | "care") => {
     setActiveSection(sec);
     const targetUrl =
       sec === "tasks" ? "/calling/tasks" : sec === "helpers" ? "/calling/helpers" : "/calling/care";
-    window.history.replaceState(null, "", targetUrl);
+    if (location.pathname !== targetUrl) navigate(targetUrl);
   };
 
   useEffect(() => {
@@ -156,45 +188,6 @@ export function CallingAgentView({
     4000
   );
   const escalationsList = escalations ?? polledEscalations ?? [];
-  const [careSearch, setCareSearch] = useState("");
-  const [careFilter, setCareFilter] = useState<"all" | "open" | "in_progress" | "resolved">("all");
-
-  const escalationCounts = useMemo(() => {
-    const counts = { all: escalationsList.length, open: 0, in_progress: 0, resolved: 0 };
-    for (const e of escalationsList) {
-      if (e.status === "open") counts.open++;
-      else if (e.status === "in_progress") counts.in_progress++;
-      else if (e.status === "resolved") counts.resolved++;
-    }
-    return counts;
-  }, [escalationsList]);
-
-  const filteredEscalations = useMemo(() => {
-    return escalationsList.filter((e) => {
-      if (careFilter === "open" && e.status !== "open") return false;
-      if (careFilter === "in_progress" && e.status !== "in_progress") return false;
-      if (careFilter === "resolved" && e.status !== "resolved") return false;
-
-      if (careSearch.trim()) {
-        const q = careSearch.toLowerCase();
-        const matchesTicket =
-          e.ticket?.id?.toLowerCase().includes(q) ||
-          e.ticket?.title?.toLowerCase().includes(q) ||
-          e.ticket?.customer?.name?.toLowerCase().includes(q) ||
-          e.ticket?.customer?.phone?.includes(q) ||
-          e.ticket?.category?.toLowerCase().includes(q) ||
-          e.ticket?.city?.toLowerCase().includes(q) ||
-          e.ticket?.address?.toLowerCase().includes(q);
-        const matchesReason = e.reason?.toLowerCase().includes(q);
-        const matchesNotes = e.notes?.toLowerCase().includes(q);
-        const matchesDetails = e.details?.toLowerCase().includes(q);
-        const matchesAssignee = e.assigned_to?.toLowerCase().includes(q);
-        if (!matchesTicket && !matchesReason && !matchesNotes && !matchesDetails && !matchesAssignee) return false;
-      }
-      return true;
-    });
-  }, [escalationsList, careFilter, careSearch]);
-
   const handleEscalationChange = () => {
     onRefreshEscalations?.();
     refreshPolledEscalations();
@@ -202,16 +195,15 @@ export function CallingAgentView({
   };
 
   // Tasks state
-  const [ticketSearch, setTicketSearch] = useState("");
-  const [dateFilter, setDateFilter] = useState<"all" | "today" | "upcoming" | "past">("all");
-  const [ticketStatusFilter, setTicketStatusFilter] = useState("");
-  const [ticketSortOrder] = useState<"desc" | "asc">("desc");
+  // Filters live in the URL so a reload keeps them
 
   // Helpers state
-  const [helperSearch, setHelperSearch] = useState("");
-  const [helperFilter, setHelperFilter] = useState<"all" | "available" | "assigned" | "verified">("all");
-  const [helperServiceFilter, setHelperServiceFilter] = useState("");
-  const [helperLocationFilter, setHelperLocationFilter] = useState("");
+  const [helperSearch, setHelperSearch] = useUrlState<string>("hq", "");
+  const [helperFilter, setHelperFilter] = useUrlState<
+    "all" | "available" | "assigned" | "not_available" | "verified" | "full_time" | "part_time"
+  >("show", "all");
+  const [helperServiceFilter, setHelperServiceFilter] = useUrlState<string>("service", "");
+  const [helperLocationFilter, setHelperLocationFilter] = useUrlState<string>("place", "");
 
   // Canonical grouped services with helper counts for the dropdown
   const availableServices = useMemo(() => {
@@ -271,8 +263,8 @@ export function CallingAgentView({
     [completedCalls, acceptedCount, rejectedCount]
   );
 
-  const [callFilter, setCallFilter] = useState<"all" | "accepted" | "rejected" | "other">("all");
-  const [callSearch, setCallSearch] = useState("");
+  const [callFilter, setCallFilter] = useUrlState<"all" | "accepted" | "rejected" | "other">("calls", "all");
+  const [callSearch, setCallSearch] = useUrlState<string>("callq", "");
 
   const filteredCompletedCalls = useMemo(() => {
     return completedCalls.filter((c) => {
@@ -309,48 +301,20 @@ export function CallingAgentView({
       | "direct_followup"
       | "calling_followup"
   ) => {
-    if (type === "all") {
-      setActiveTab("tickets");
-      setActiveSection("tasks");
-      setDateFilter("today");
-      setTicketStatusFilter("");
-    } else if (type === "assigned") {
-      setActiveTab("tickets");
-      setActiveSection("tasks");
-      setDateFilter("today");
-      setTicketStatusFilter("assigned");
-    } else if (type === "unassigned") {
-      setActiveTab("tickets");
-      setActiveSection("tasks");
-      setDateFilter("today");
-      setTicketStatusFilter("new");
-    } else if (type === "calls") {
-      setActiveTab("console");
-      setCallFilter("all");
-      const el = document.getElementById("call-log-section");
-      el?.scrollIntoView({ behavior: "smooth" });
+    // Real URLs (with filters in the query), so reload and Back return to exactly this view
+    const go = (path: string) => navigate(path);
+    const scrollToCalls = () =>
+      setTimeout(() => document.getElementById("call-log-section")?.scrollIntoView({ behavior: "smooth" }), 350);
+    if (type === "all" || type === "calling_followup" || type === "followup") go("/calling/tasks?date=today");
+    else if (type === "assigned" || type === "direct_followup") go("/calling/tasks?date=today&status=assigned");
+    else if (type === "unassigned") go("/calling/tasks?date=today&status=new");
+    else if (type === "calls") {
+      go("/calling/console");
+      scrollToCalls();
     } else if (type === "accepted") {
-      setActiveTab("console");
-      setCallFilter("accepted");
-      const el = document.getElementById("call-log-section");
-      el?.scrollIntoView({ behavior: "smooth" });
-    } else if (type === "care") {
-      setActiveTab("tickets");
-      setActiveSection("care");
-    } else if (type === "direct_followup") {
-      setActiveTab("tickets");
-      setActiveSection("tasks");
-      setDateFilter("today");
-      setTicketStatusFilter("assigned");
-    } else if (type === "calling_followup") {
-      setActiveTab("tickets");
-      setActiveSection("tasks");
-      setDateFilter("today");
-    } else if (type === "followup") {
-      setActiveTab("tickets");
-      setActiveSection("tasks");
-      setDateFilter("today");
-    }
+      go("/calling/console?calls=accepted");
+      scrollToCalls();
+    } else if (type === "care") go("/calling/care");
   };
 
   const formatCallDuration = (c: Call) => {
@@ -382,114 +346,18 @@ export function CallingAgentView({
     return () => clearInterval(timer);
   }, [currentDayKey, onRefreshAll]);
 
-  // Determine date category dynamically relative to current live calendar day:
-  // - today: scheduled/created today (Current Tasks)
-  // - upcoming: scheduled in future (Upcoming Tasks)
-  // - past: scheduled before today (Previous Tasks)
-  const getDateCategory = (t: TicketType): "today" | "upcoming" | "past" => {
-    // The backend decides (same rule as the dashboards: booked today or scheduled for today, India time)
-    if (t.date_status === "today" || t.date_status === "upcoming" || t.date_status === "past") return t.date_status;
-    const dateStr = t.scheduled_at || t.created_at;
-    if (!dateStr) return "past";
-    const target = new Date(dateStr);
-    if (isNaN(target.getTime())) return "past";
-
-    const now = new Date();
-    const dTarget = new Date(target.getFullYear(), target.getMonth(), target.getDate()).getTime();
-    const dNow = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    const diffDays = Math.round((dTarget - dNow) / (1000 * 60 * 60 * 24));
-
-    if (diffDays === 0) return "today";
-    if (diffDays > 0) return "upcoming";
-    return "past";
-  };
-
-  // Live date counts recomputed dynamically whenever tickets or calendar day changes
-  const dateCounts = useMemo(() => {
-    const counts = { all: tickets?.length ?? 0, today: 0, upcoming: 0, past: 0 };
-    for (const t of tickets ?? []) {
-      const cat = getDateCategory(t);
-      counts[cat] = (counts[cat] || 0) + 1;
-    }
-    return counts;
-  }, [tickets, currentDayKey]);
-
-  // Status counts
-  const ticketCounts: Record<string, number> = {};
-  for (const t of tickets ?? []) {
-    ticketCounts[t.dispatch_status] = (ticketCounts[t.dispatch_status] ?? 0) + 1;
-    if (t.status === "completed") ticketCounts["completed"] = (ticketCounts["completed"] ?? 0) + 1;
-    if (t.status === "cancelled") ticketCounts["cancelled"] = (ticketCounts["cancelled"] ?? 0) + 1;
-  }
-
-  const STATUS_TABS = [
-    { key: "", label: "All Status", count: tickets?.length ?? 0 },
-    { key: "new", label: "Unassigned", count: ticketCounts["new"] ?? 0 },
-    { key: "dispatching", label: "Calling", count: ticketCounts["dispatching"] ?? 0 },
-    { key: "assigned", label: "Assigned", count: ticketCounts["assigned"] ?? 0 },
-    { key: "completed", label: "Completed", count: ticketCounts["completed"] ?? 0 },
-  ];
-
-  const filteredTickets = useMemo(() => {
-    const list = (tickets ?? []).filter((t) => {
-      const cat = getDateCategory(t);
-      if (dateFilter !== "all" && cat !== dateFilter) return false;
-
-      if (ticketStatusFilter) {
-        if (ticketStatusFilter === "completed" && t.status !== "completed") return false;
-        if (ticketStatusFilter === "cancelled" && t.status !== "cancelled") return false;
-        if (
-          ticketStatusFilter !== "completed" &&
-          ticketStatusFilter !== "cancelled" &&
-          t.dispatch_status !== ticketStatusFilter
-        ) {
-          return false;
-        }
-      }
-      if (!ticketSearch.trim()) return true;
-      const q = ticketSearch.toLowerCase();
-      return (
-        t.id.toLowerCase().includes(q) ||
-        (t.title && t.title.toLowerCase().includes(q)) ||
-        (t.category && t.category.toLowerCase().includes(q)) ||
-        (t.customer?.name && t.customer.name.toLowerCase().includes(q)) ||
-        (t.customer?.phone && t.customer.phone.includes(q)) ||
-        (t.address && t.address.toLowerCase().includes(q)) ||
-        (t.city && t.city.toLowerCase().includes(q))
-      );
-    });
-
-    return [...list].sort((a, b) => {
-      const timeA = a.scheduled_at
-        ? new Date(a.scheduled_at).getTime()
-        : a.created_at
-        ? new Date(a.created_at).getTime()
-        : 0;
-      const timeB = b.scheduled_at
-        ? new Date(b.scheduled_at).getTime()
-        : b.created_at
-        ? new Date(b.created_at).getTime()
-        : 0;
-      return ticketSortOrder === "desc" ? timeB - timeA : timeA - timeB;
-    });
-  }, [tickets, dateFilter, ticketStatusFilter, ticketSearch, ticketSortOrder, currentDayKey]);
-
-  // Group filtered tasks by Date: Current (Today), Upcoming (Future), Previous (Past)
-  const todayList = useMemo(() => filteredTickets.filter((t) => getDateCategory(t) === "today"), [filteredTickets, currentDayKey]);
-  const futureList = useMemo(() => filteredTickets.filter((t) => getDateCategory(t) === "upcoming"), [filteredTickets, currentDayKey]);
-  const pastList = useMemo(() => filteredTickets.filter((t) => getDateCategory(t) === "past"), [filteredTickets, currentDayKey]);
-
   // Helpers filtering logic with Status, Service, Location/Place, and Text search
   const filteredHelpers = useMemo(() => {
     return (helpers ?? []).filter((h) => {
       // 1. Status Filter
-      if (helperFilter === "available" && (!h.can_accept_tasks || !h.is_active || (h.active_tickets_count ?? 0) > 0)) {
-        return false;
-      }
-      if (helperFilter === "assigned" && (h.active_tickets_count ?? 0) === 0) {
+      if ((helperFilter === "available" || helperFilter === "assigned" || helperFilter === "not_available")
+        && helperAvailability(h) !== helperFilter) {
         return false;
       }
       if (helperFilter === "verified" && !h.is_verified) {
+        return false;
+      }
+      if ((helperFilter === "full_time" || helperFilter === "part_time") && helperShift(h) !== helperFilter) {
         return false;
       }
 
@@ -525,18 +393,26 @@ export function CallingAgentView({
   }, [helpers, helperFilter, helperServiceFilter, helperLocationFilter, helperSearch]);
 
   const helperCounts = useMemo(() => {
-    const all = helpers?.length ?? 0;
-    const available = (helpers ?? []).filter(
-      (h) => h.can_accept_tasks && h.is_active && (h.active_tickets_count ?? 0) === 0
-    ).length;
-    const assigned = (helpers ?? []).filter((h) => (h.active_tickets_count ?? 0) > 0).length;
-    const verified = (helpers ?? []).filter((h) => h.is_verified).length;
-    return { all, available, assigned, verified };
+    const c = { all: 0, available: 0, assigned: 0, not_available: 0, verified: 0, full_time: 0, part_time: 0, shift_unset: 0,
+      rejected: 0, no_phone: 0 };
+    for (const h of helpers ?? []) {
+      c.all += 1;
+      c[helperAvailability(h)] += 1;
+      if (h.is_verified) c.verified += 1;
+      const sh = helperShift(h);
+      if (sh === "unset") c.shift_unset += 1;
+      else c[sh] += 1;
+      if ((h.status || "").toLowerCase() === "rejected") c.rejected += 1;
+      if (!h.phone) c.no_phone += 1;
+    }
+    return c;
   }, [helpers]);
 
   const renderSingleLineHelper = (h: Helper) => {
-    const isAvailable = h.can_accept_tasks && h.is_active && (h.active_tickets_count ?? 0) === 0;
-    const isAssigned = (h.active_tickets_count ?? 0) > 0;
+    const availability = helperAvailability(h);
+    const isAvailable = availability === "available";
+    const isAssigned = availability === "assigned";
+    const shift = helperShift(h);
     const canonicalServices = getCanonicalServices(h);
 
     return (
@@ -620,9 +496,13 @@ export function CallingAgentView({
 
         {/* Work Shift */}
         <div style={{ minWidth: "90px", textAlign: "center" }}>
-          <span className="tag" style={{ margin: 0, fontSize: "11px" }}>
-            {h.work_shift_type === "part_time" ? "Part-time" : "Full-time"}
-          </span>
+          {shift === "unset" ? (
+            <span className="small muted" title="Shift type is not set on ExtraHand">Shift not set</span>
+          ) : (
+            <span className="tag" style={{ margin: 0, fontSize: "11px" }}>
+              {shift === "part_time" ? "Part-time" : "Full-time"}
+            </span>
+          )}
         </div>
 
         {/* Status / Availability Badge */}
@@ -638,8 +518,9 @@ export function CallingAgentView({
               <span>Available</span>
             </span>
           ) : (
-            <span className="muted" style={{ fontSize: "12px" }}>
-              Inactive
+            <span style={{ display: "inline-flex", alignItems: "center", gap: "5px", color: "#b91c1c", fontWeight: 600, fontSize: "12px", background: "rgba(220, 38, 38, 0.08)", padding: "3px 9px", borderRadius: "12px", whiteSpace: "nowrap" }}>
+              <XCircle size={13} />
+              <span>{helperBlockReason(h) || "Not available"}</span>
             </span>
           )}
         </div>
@@ -648,213 +529,6 @@ export function CallingAgentView({
   };
 
   // Render ExtraHand Work Status Badge (Open, In Progress, Completed, Cancelled, Assigned)
-  const renderWorkStatusBadge = (status: string | null) => {
-    const s = (status || "open").toLowerCase().trim();
-    if (s.includes("complete") || s.includes("done")) {
-      return (
-        <span className="task-status-pill status-completed" title="ExtraHand Work Status: Completed">
-          <span className="status-dot green" />
-          <span>Completed</span>
-        </span>
-      );
-    }
-    if (s.includes("progress") || s.includes("started") || s.includes("working")) {
-      return (
-        <span className="task-status-pill status-in-progress" title="ExtraHand Work Status: In Progress">
-          <span className="status-dot blue" />
-          <span>In Progress</span>
-        </span>
-      );
-    }
-    if (s.includes("cancel")) {
-      return (
-        <span className="task-status-pill status-cancelled" title="ExtraHand Work Status: Cancelled">
-          <span className="status-dot red" />
-          <span>Cancelled</span>
-        </span>
-      );
-    }
-    if (s.includes("assign")) {
-      return (
-        <span className="task-status-pill status-assigned" title="ExtraHand Work Status: Assigned">
-          <span className="status-dot purple" />
-          <span>Assigned</span>
-        </span>
-      );
-    }
-    return (
-      <span className="task-status-pill status-open" title="ExtraHand Work Status: Open">
-        <span className="status-dot amber" />
-        <span>Open</span>
-      </span>
-    );
-  };
-
-  // Render Automated Voice Follow-Up Reminder Badge (from system)
-  const renderFollowupBadge = (fu?: FollowUp | null) => {
-    if (!fu) {
-      return (
-        <span className="task-followup-pill followup-none" title="No automated voice follow-up reminder scheduled">
-          <span className="muted mono" style={{ fontSize: "11px" }}>— No Follow-up</span>
-        </span>
-      );
-    }
-    const status = (fu.status || "").toLowerCase().trim();
-    if (status === "calling" || status === "active") {
-      return (
-        <span className="task-followup-pill followup-calling" title="Calling helper for follow-up confirmation">
-          <span className="live-dot" />
-          <span>Calling…</span>
-        </span>
-      );
-    }
-    if (status === "completed" || status === "done" || status === "confirmed") {
-      return (
-        <span className="task-followup-pill followup-confirmed" title="Follow-up call completed & verified">
-          <CheckCircle2 size={11} style={{ flexShrink: 0 }} />
-          <span>Confirmed</span>
-        </span>
-      );
-    }
-    return (
-      <span className="task-followup-pill followup-scheduled" title={`Follow-up reminder due at ${fmtDateTime(fu.due_at)}`}>
-        <Clock size={11} style={{ flexShrink: 0 }} />
-        <span className="nowrap">Due {fmtRelative(fu.due_at)}</span>
-      </span>
-    );
-  };
-
-  // Helper to render table column header row
-  const renderTaskListHeader = () => (
-    <div className="task-line-header-row">
-      <div className="task-line-main header-label">Task &amp; Service</div>
-      <div className="task-line-customer header-label">Customer</div>
-      <div className="task-line-location header-label">Location</div>
-      <div className="task-line-schedule header-label">Schedule</div>
-      <div className="task-line-status header-label">Work Status</div>
-      <div className="task-line-followup header-label">Follow-up</div>
-      <div className="task-line-budget header-label" style={{ textAlign: "right", justifyContent: "flex-end" }}>Budget</div>
-      <div className="task-line-assignment header-label" style={{ justifyContent: "flex-end" }}>Dispatch</div>
-    </div>
-  );
-
-  // Helper to render each task cleanly in a single line
-  const renderSingleLineTask = (t: TicketType, cat: "today" | "upcoming" | "past") => {
-    return (
-      <div key={t.id} className={`task-line-item line-${cat}`}>
-        {/* Task Title, Category Tag, ID */}
-        <div className="task-line-main">
-          <span style={{ fontWeight: 650, color: "var(--text)" }}>{t.title || "Customer Task"}</span>
-          <span className="task-category-tag">{t.category || "Service"}</span>
-          <span className="small muted mono">#{String(t.id || "").slice(-6)}</span>
-        </div>
-
-        {/* Customer & Phone */}
-        <div className="task-line-customer">
-          <User size={13} style={{ color: "var(--muted)", flexShrink: 0 }} />
-          <div>
-            <span style={{ fontWeight: 600 }}>{t.customer?.name || "Customer"}</span>
-            {t.customer?.phone && (
-              <span className="small muted">
-                {" "}· <PhoneText value={t.customer?.phone} />
-              </span>
-            )}
-          </div>
-        </div>
-
-        {/* Location */}
-        <div className="task-line-location">
-          <MapPin size={13} style={{ flexShrink: 0 }} />
-          <span className="truncate" title={t.address || t.city || ""}>
-            {t.city || t.address || "Bangalore"}
-          </span>
-        </div>
-
-        {/* Scheduled Timing */}
-        <div className="task-line-schedule">
-          <Calendar size={13} style={{ color: "var(--muted)", flexShrink: 0 }} />
-          <span className="nowrap">
-            {t.scheduled_at ? fmtDateTime(t.scheduled_at) : "Flexible"}
-          </span>
-        </div>
-
-        {/* Work Status (ExtraHand) */}
-        <div className="task-line-status">
-          {renderWorkStatusBadge(t.status)}
-        </div>
-
-        {/* Voice Follow-Up Reminder */}
-        <div className="task-line-followup">
-          {renderFollowupBadge(t.next_followup)}
-        </div>
-
-        {/* Budget Amount */}
-        <div className="task-line-budget">
-          {t.budget && t.budget > 0 ? fmtMoney(t.budget) : "Negotiable"}
-        </div>
-
-        {/* Assignment Status:
-            - For PAST: Yellow badge, DO NOT show assigned / unassigned!
-            - For TODAY & FUTURE: Prominently show assigned or unassigned! */}
-        <div className="task-line-assignment">
-          {cat === "past" ? (
-            <span className="badge-past-yellow">Closed</span>
-          ) : t.assignee ? (
-            <span
-              className="task-status-assigned-badge clickable"
-              style={{ cursor: "pointer" }}
-              title="Click to view helper details without leaving page"
-              onClick={() => {
-                switchSection("helpers");
-                setHelperSearch(t.assignee?.name || "");
-              }}
-            >
-              <CheckCircle2 size={13} />
-              <span>
-                Assigned: <b>{t.assignee?.name || "Assigned"}</b>
-              </span>
-            </span>
-          ) : t.dispatch_status === "escalated" ? (
-            <span
-              className="badge clickable"
-              style={{
-                cursor: "pointer",
-                background: "rgba(239, 68, 68, 0.12)",
-                color: "var(--danger)",
-                border: "1px solid rgba(239, 68, 68, 0.3)",
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "4px",
-                padding: "2px 8px",
-                borderRadius: "12px",
-                fontSize: "12px",
-                fontWeight: 600,
-              }}
-              title="Click to view Customer Care escalation in-page"
-              onClick={() => {
-                switchSection("care");
-                setCareSearch(t.id);
-              }}
-            >
-              <LifeBuoy size={13} />
-              <span>Customer Care</span>
-            </span>
-          ) : t.active_call ? (
-            <span className="task-status-calling-badge">
-              <span className="live-dot" />
-              <span>Calling: {t.active_call?.helper_name || "Helper"}…</span>
-            </span>
-          ) : (
-            <span className="task-status-unassigned-badge">
-              <AlertCircle size={13} />
-              <span>Unassigned</span>
-            </span>
-          )}
-        </div>
-      </div>
-    );
-  };
-
   /* =========================================================================
      VIEW 0: CALLING AGENT DISPATCH PIPELINE (DEDICATED SIDEBAR MODULE)
      ========================================================================= */
@@ -904,18 +578,18 @@ export function CallingAgentView({
               </h1>
               <span className="badge" style={{ fontSize: "12px", background: "var(--surface-2)", border: "1px solid var(--border)", padding: "3px 8px", borderRadius: "12px" }}>
                 {activeSection === "tasks"
-                  ? `${filteredTickets.length} tasks`
+                  ? `${tickets?.length ?? 0} tasks`
                   : activeSection === "helpers"
                   ? `${filteredHelpers.length} helpers`
-                  : `${filteredEscalations.length} cases`}
+                  : `${escalationsList.filter((e) => e.status !== "resolved").length} to do`}
               </span>
             </div>
             <p className="muted" style={{ margin: "4px 0 0 0", fontSize: "0.875rem" }}>
               {activeSection === "tasks"
-                ? "Separated list view: Tasks grouped by Current, Upcoming, and Previous schedule dates. All details in one clean line."
+                ? "Every customer task with its WhatsApp alerts, helper calls, follow-ups and assigned helper. Same list as WhatsApp → Send Work Order."
                 : activeSection === "helpers"
                 ? "Directory of ExtraHand service partners & dispatch helpers with skill profiles, locations, and dispatch availability in list format."
-                : "Escalated customer tasks requiring manual resolution, helper redispatch, or customer callbacks."}
+                : "Cases the calling agent could not finish on its own: pick one, call the customer or helper, and resolve it."}
             </p>
           </div>
         </div>
@@ -923,6 +597,55 @@ export function CallingAgentView({
         {/* SECTION A: HELPER DETAILS LIST VIEW */}
         {activeSection === "helpers" && (
           <div>
+            {/* Helper KPI cards: click one to filter the directory */}
+            {(() => {
+              const pct = (n: number) => (helperCounts.all ? `${Math.round((n / helperCounts.all) * 100)}%` : "0%");
+              const items: {
+                key: typeof helperFilter; label: string; value: number; meta: string; color: string; icon: JSX.Element;
+              }[] = [
+                { key: "all", label: "Total Helpers", value: helperCounts.all, meta: "Synced from ExtraHand", color: "#2563eb", icon: <Users size={16} /> },
+                { key: "available", label: "Available", value: helperCounts.available, meta: `${pct(helperCounts.available)} · ready to dispatch`, color: "#16a34a", icon: <CheckCircle2 size={16} /> },
+                { key: "assigned", label: "Assigned", value: helperCounts.assigned, meta: "Working on open tasks", color: "#0891b2", icon: <Activity size={16} /> },
+                { key: "not_available", label: "Not Available", value: helperCounts.not_available, meta: `${helperCounts.rejected} rejected · ${helperCounts.no_phone} no phone`, color: "#dc2626", icon: <XCircle size={16} /> },
+                { key: "verified", label: "Verified", value: helperCounts.verified, meta: `${pct(helperCounts.verified)} Aadhaar verified`, color: "#7c3aed", icon: <ShieldCheck size={16} /> },
+                { key: "full_time", label: "Full-time", value: helperCounts.full_time, meta: `${helperCounts.shift_unset} with shift not set`, color: "#ea580c", icon: <Clock size={16} /> },
+                { key: "part_time", label: "Part-time", value: helperCounts.part_time, meta: "Limited hours", color: "#ca8a04", icon: <Clock size={16} /> },
+              ];
+              return (
+                <div className="helper-kpi-grid">
+                  {items.map((it) => {
+                    const active = helperFilter === it.key;
+                    return (
+                      <div
+                        key={it.key}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => setHelperFilter(active && it.key !== "all" ? "all" : it.key)}
+                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setHelperFilter(it.key); }}
+                        className={`task-kpi-card ${active ? "task-kpi-active" : ""}`}
+                        style={active ? { borderColor: it.color, boxShadow: `0 0 0 1px ${it.color}` } : undefined}
+                        title={`Show ${it.label.toLowerCase()} helpers`}
+                      >
+                        <div className="task-kpi-top">
+                          <div className="task-kpi-icon-wrap" style={{ background: `${it.color}1f`, color: it.color }}>{it.icon}</div>
+                          {active && <span className="task-kpi-indicator" style={{ color: it.color }}>● Active</span>}
+                        </div>
+                        <div className="task-kpi-middle">
+                          <span className="task-kpi-label">{it.label}</span>
+                          <span className="task-kpi-value" style={{ color: it.color }}>
+                            <AnimatedNumber value={it.value} />
+                          </span>
+                        </div>
+                        <div className="task-kpi-footer">
+                          <span className="task-kpi-meta">{it.meta}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+
             {/* Search Bar for Helpers */}
             <div style={{ marginBottom: "0.75rem" }}>
               <label className="search" style={{ margin: 0, width: "100%", display: "flex", alignItems: "center" }}>
@@ -1010,41 +733,6 @@ export function CallingAgentView({
               )}
             </div>
 
-            {/* Helper Status Filter Buttons */}
-            <div style={{ display: "flex", gap: "8px", marginBottom: "1.25rem", flexWrap: "wrap" }}>
-              <button
-                type="button"
-                className={`btn btn-sm ${helperFilter === "all" ? "btn-primary" : "btn-secondary"}`}
-                onClick={() => setHelperFilter("all")}
-              >
-                All Helpers ({helperCounts.all})
-              </button>
-              <button
-                type="button"
-                className={`btn btn-sm ${helperFilter === "available" ? "btn-primary" : "btn-secondary"}`}
-                onClick={() => setHelperFilter("available")}
-                style={helperFilter === "available" ? { background: "#16a34a", borderColor: "#16a34a", color: "#fff" } : {}}
-              >
-                Available / Ready ({helperCounts.available})
-              </button>
-              <button
-                type="button"
-                className={`btn btn-sm ${helperFilter === "assigned" ? "btn-primary" : "btn-secondary"}`}
-                onClick={() => setHelperFilter("assigned")}
-                style={helperFilter === "assigned" ? { background: "#2563eb", borderColor: "#2563eb", color: "#fff" } : {}}
-              >
-                Currently Assigned ({helperCounts.assigned})
-              </button>
-              <button
-                type="button"
-                className={`btn btn-sm ${helperFilter === "verified" ? "btn-primary" : "btn-secondary"}`}
-                onClick={() => setHelperFilter("verified")}
-                style={helperFilter === "verified" ? { background: "#7c3aed", borderColor: "#7c3aed", color: "#fff" } : {}}
-              >
-                Verified Partners ({helperCounts.verified})
-              </button>
-            </div>
-
             {/* Helper Single-Line List Content */}
             {!helpers ? (
               <div className="card-body">
@@ -1072,330 +760,29 @@ export function CallingAgentView({
           </div>
         )}
 
-        {/* SECTION B: TICKETS & TASKS LIST VIEW */}
+        {/* SECTION B: TICKETS & TASKS - the same TaskBoard as WhatsApp > Send Work Order */}
         {activeSection === "tasks" && (
-          <div>
-            {/* 4 Interactive Big KPI Cards for Date Category Filtering */}
-            <div className="task-kpi-grid">
-              {/* Card 1: All Tasks */}
-              <div
-                role="button"
-                tabIndex={0}
-                onClick={() => setDateFilter("all")}
-                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setDateFilter("all"); }}
-                className={`task-kpi-card ${dateFilter === "all" ? "task-kpi-active" : ""}`}
-                title="Filter by all tasks"
-              >
-                <div className="task-kpi-top">
-                  <div className="task-kpi-icon-wrap" style={{ background: "rgba(37, 99, 235, 0.12)", color: "#2563eb" }}>
-                    <Layers size={16} />
-                  </div>
-                  <span className="task-kpi-badge" style={{ background: "rgba(37, 99, 235, 0.1)", color: "#1d4ed8" }}>
-                    {dateFilter === "all" ? "Selected" : "All"}
-                  </span>
-                </div>
-                <div className="task-kpi-middle">
-                  <span className="task-kpi-label">All Tasks</span>
-                  <span className="task-kpi-value" style={{ color: "var(--brand, #2563eb)" }}>
-                    <AnimatedNumber value={dateCounts.all} />
-                  </span>
-                </div>
-                <div className="task-kpi-footer">
-                  <span className="task-kpi-meta">Total operational tickets</span>
-                  {dateFilter === "all" && (
-                    <span className="task-kpi-indicator" style={{ color: "#2563eb" }}>● Active</span>
-                  )}
-                </div>
-              </div>
-
-              {/* Card 2: Current Tasks (Today) */}
-              <div
-                role="button"
-                tabIndex={0}
-                onClick={() => setDateFilter("today")}
-                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setDateFilter("today"); }}
-                className={`task-kpi-card ${dateFilter === "today" ? "task-kpi-active active-today" : ""}`}
-                title="Filter by tasks due today"
-              >
-                <div className="task-kpi-top">
-                  <div className="task-kpi-icon-wrap" style={{ background: "rgba(5, 150, 105, 0.12)", color: "#059669" }}>
-                    <Clock size={16} />
-                  </div>
-                  <span className="task-kpi-badge" style={{ background: "rgba(5, 150, 105, 0.12)", color: "#047857", display: "inline-flex", alignItems: "center", gap: "4px" }}>
-                    <span className="dot pulse success" style={{ width: 5, height: 5 }} />
-                    Today
-                  </span>
-                </div>
-                <div className="task-kpi-middle">
-                  <span className="task-kpi-label">Current</span>
-                  <span className="task-kpi-value" style={{ color: "#059669" }}>
-                    <AnimatedNumber value={dateCounts.today} />
-                  </span>
-                </div>
-                <div className="task-kpi-footer">
-                  <span className="task-kpi-meta">Due today · urgent priority</span>
-                  {dateFilter === "today" && (
-                    <span className="task-kpi-indicator" style={{ color: "#059669" }}>● Active</span>
-                  )}
-                </div>
-              </div>
-
-              {/* Card 3: Upcoming Tasks */}
-              <div
-                role="button"
-                tabIndex={0}
-                onClick={() => setDateFilter("upcoming")}
-                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setDateFilter("upcoming"); }}
-                className={`task-kpi-card ${dateFilter === "upcoming" ? "task-kpi-active active-upcoming" : ""}`}
-                title="Filter by upcoming scheduled tasks"
-              >
-                <div className="task-kpi-top">
-                  <div className="task-kpi-icon-wrap" style={{ background: "rgba(234, 88, 12, 0.12)", color: "#ea580c" }}>
-                    <Calendar size={16} />
-                  </div>
-                  <span className="task-kpi-badge" style={{ background: "rgba(234, 88, 12, 0.12)", color: "#c2410c" }}>
-                    Future
-                  </span>
-                </div>
-                <div className="task-kpi-middle">
-                  <span className="task-kpi-label">Upcoming</span>
-                  <span className="task-kpi-value" style={{ color: "#ea580c" }}>
-                    <AnimatedNumber value={dateCounts.upcoming} />
-                  </span>
-                </div>
-                <div className="task-kpi-footer">
-                  <span className="task-kpi-meta">Scheduled for later dates</span>
-                  {dateFilter === "upcoming" && (
-                    <span className="task-kpi-indicator" style={{ color: "#ea580c" }}>● Active</span>
-                  )}
-                </div>
-              </div>
-
-              {/* Card 4: Previous Tasks */}
-              <div
-                role="button"
-                tabIndex={0}
-                onClick={() => setDateFilter("past")}
-                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setDateFilter("past"); }}
-                className={`task-kpi-card ${dateFilter === "past" ? "task-kpi-active active-past" : ""}`}
-                title="Filter by past/completed tasks"
-              >
-                <div className="task-kpi-top">
-                  <div className="task-kpi-icon-wrap" style={{ background: "rgba(202, 138, 4, 0.12)", color: "#ca8a04" }}>
-                    <History size={16} />
-                  </div>
-                  <span className="task-kpi-badge" style={{ background: "rgba(202, 138, 4, 0.12)", color: "#a16207" }}>
-                    History
-                  </span>
-                </div>
-                <div className="task-kpi-middle">
-                  <span className="task-kpi-label">Previous</span>
-                  <span className="task-kpi-value" style={{ color: "#ca8a04" }}>
-                    <AnimatedNumber value={dateCounts.past} />
-                  </span>
-                </div>
-                <div className="task-kpi-footer">
-                  <span className="task-kpi-meta">Past &amp; completed work</span>
-                  {dateFilter === "past" && (
-                    <span className="task-kpi-indicator" style={{ color: "#ca8a04" }}>● Active</span>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Search Bar */}
-            <div style={{ marginBottom: "1rem" }}>
-              <label className="search" style={{ margin: 0, width: "100%", display: "flex", alignItems: "center" }}>
-                <Search size={16} className="search-icon" />
-                <input
-                  placeholder="Search task, customer name, phone, location, service…"
-                  value={ticketSearch}
-                  onChange={(e) => setTicketSearch(e.target.value)}
-                  style={{ width: "100%", padding: "10px 14px 10px 38px", fontSize: "14px", borderRadius: "8px" }}
-                />
-              </label>
-            </div>
-
-            {/* Status Filter Tabs */}
-            <div style={{ marginBottom: "1.25rem" }}>
-              <Tabs
-                value={ticketStatusFilter}
-                onChange={(val) => setTicketStatusFilter(val)}
-                items={STATUS_TABS}
-              />
-            </div>
-
-            {/* List Content */}
-            {!tickets ? (
-              <div className="card-body">
-                <SkeletonRows rows={4} />
-              </div>
-            ) : filteredTickets.length === 0 ? (
-              <div style={{ padding: "3rem", textAlign: "center", border: "1px dashed var(--border)", borderRadius: "12px", background: "var(--surface)" }}>
-                <Empty icon={Ticket}>No tickets match the selected date or search filter.</Empty>
-              </div>
-            ) : (
-              <div>
-                {/* SECTION 1: CURRENT TASKS (GREEN) */}
-                {(dateFilter === "all" || dateFilter === "today") && todayList.length > 0 && (
-                  <div className="task-group-section">
-                    <div className="task-group-header">
-                      <div className="task-group-title" style={{ color: "#047857" }}>
-                        <span>Current Tasks</span>
-                        <span className="badge-today-green">{todayList.length}</span>
-                      </div>
-                    </div>
-                    {renderTaskListHeader()}
-                    <div className="task-line-list">
-                      {todayList.map((t) => renderSingleLineTask(t, "today"))}
-                    </div>
-                  </div>
-                )}
-
-                {/* SECTION 2: UPCOMING TASKS (ORANGE) */}
-                {(dateFilter === "all" || dateFilter === "upcoming") && futureList.length > 0 && (
-                  <div className="task-group-section">
-                    <div className="task-group-header">
-                      <div className="task-group-title" style={{ color: "#c2410c" }}>
-                        <span>Upcoming Tasks</span>
-                        <span className="badge-future-orange">{futureList.length}</span>
-                      </div>
-                    </div>
-                    {renderTaskListHeader()}
-                    <div className="task-line-list">
-                      {futureList.map((t) => renderSingleLineTask(t, "upcoming"))}
-                    </div>
-                  </div>
-                )}
-
-                {/* SECTION 3: PREVIOUS TASKS (YELLOW) */}
-                {(dateFilter === "all" || dateFilter === "past") && pastList.length > 0 && (
-                  <div className="task-group-section">
-                    <div className="task-group-header">
-                      <div className="task-group-title" style={{ color: "#854d0e" }}>
-                        <span>Previous Tasks</span>
-                        <span className="badge-past-yellow">{pastList.length}</span>
-                      </div>
-                    </div>
-                    {renderTaskListHeader()}
-                    <div className="task-line-list">
-                      {pastList.map((t) => renderSingleLineTask(t, "past"))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+          <TaskBoard
+            tickets={tickets}
+            onChanged={onRefreshAll}
+            onOpenHelper={(name) => {
+              switchSection("helpers");
+              setHelperSearch(name);
+            }}
+            onOpenCare={(id) => {
+              setActiveSection("care");
+              navigate(`/calling/care?care=all&cq=${encodeURIComponent(id)}`);
+            }}
+          />
         )}
 
-        {/* SECTION C: CUSTOMER CARE & ESCALATIONS VIEW */}
+        {/* SECTION C: CUSTOMER CARE (inbox: case list + case panel) */}
         {activeSection === "care" && (
-          <div>
-            {/* Search Bar & Status Filter Row */}
-            <div
-              style={{
-                display: "flex",
-                gap: "12px",
-                marginBottom: "1rem",
-                flexWrap: "wrap",
-                alignItems: "center",
-                justifyContent: "space-between",
-              }}
-            >
-              {/* Search Bar for Customer Care */}
-              <div style={{ flex: "1 1 280px", maxWidth: "480px" }}>
-                <label className="search" style={{ margin: 0, width: "100%", display: "flex", alignItems: "center" }}>
-                  <Search size={16} className="search-icon" />
-                  <input
-                    placeholder="Search by ticket ID, customer name, phone, reason, or notes…"
-                    value={careSearch}
-                    onChange={(e) => setCareSearch(e.target.value)}
-                    style={{ width: "100%", padding: "10px 14px 10px 38px", fontSize: "14px", borderRadius: "8px" }}
-                  />
-                </label>
-              </div>
-
-              {/* Status Filter Buttons */}
-              <div
-                style={{
-                  display: "inline-flex",
-                  gap: "6px",
-                  background: "var(--surface-2)",
-                  padding: "4px",
-                  borderRadius: "8px",
-                  border: "1px solid var(--border)",
-                  flexWrap: "wrap",
-                }}
-              >
-                <button
-                  type="button"
-                  className={`btn btn-sm ${careFilter === "all" ? "btn-primary" : "btn-ghost"}`}
-                  onClick={() => setCareFilter("all")}
-                  style={{ fontSize: "12px", fontWeight: 600 }}
-                >
-                  All ({escalationsList.length})
-                </button>
-                <button
-                  type="button"
-                  className={`btn btn-sm ${careFilter === "open" ? "btn-primary" : "btn-ghost"}`}
-                  onClick={() => setCareFilter("open")}
-                  style={{ fontSize: "12px", fontWeight: 600 }}
-                >
-                  Open ({escalationCounts.open})
-                </button>
-                <button
-                  type="button"
-                  className={`btn btn-sm ${careFilter === "in_progress" ? "btn-primary" : "btn-ghost"}`}
-                  onClick={() => setCareFilter("in_progress")}
-                  style={{ fontSize: "12px", fontWeight: 600 }}
-                >
-                  In Progress ({escalationCounts.in_progress})
-                </button>
-                <button
-                  type="button"
-                  className={`btn btn-sm ${careFilter === "resolved" ? "btn-primary" : "btn-ghost"}`}
-                  onClick={() => setCareFilter("resolved")}
-                  style={{ fontSize: "12px", fontWeight: 600 }}
-                >
-                  Resolved ({escalationCounts.resolved})
-                </button>
-              </div>
-            </div>
-
-            {/* List of Escalation Cards */}
-            {filteredEscalations.length === 0 ? (
-              <div
-                style={{
-                  padding: "48px 24px",
-                  textAlign: "center",
-                  background: "var(--surface)",
-                  border: "1px solid var(--border)",
-                  borderRadius: "12px",
-                  color: "var(--muted)",
-                }}
-              >
-                <LifeBuoy size={42} style={{ margin: "0 auto 12px auto", opacity: 0.5, color: "var(--brand)" }} />
-                <h3 style={{ margin: "0 0 6px 0", fontSize: "1.1rem", fontWeight: 600, color: "var(--text)" }}>
-                  No Customer Care Cases Found
-                </h3>
-                <p style={{ margin: 0, fontSize: "0.9rem" }}>
-                  {careSearch || careFilter !== "all"
-                    ? "Try adjusting your search query or status filter."
-                    : "All customer tickets are currently placed or resolved."}
-                </p>
-              </div>
-            ) : (
-              <div className="esc-list" style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
-                {filteredEscalations.map((esc) => (
-                  <EscalationCard
-                    key={esc.id}
-                    esc={esc}
-                    onChange={handleEscalationChange}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
+          <CustomerCareView
+            escalations={escalationsList}
+            loading={!escalations && !polledEscalations}
+            onChange={handleEscalationChange}
+          />
         )}
       </div>
     );
@@ -1475,6 +862,9 @@ export function CallingAgentView({
 
   return (
     <div className="agent-features-container calling-theme" style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
+      {/* MASTER CALLING AGENT ACTIVATION / DEACTIVATION BANNER */}
+      <CallingAgentToggle variant="banner" onStatusChange={onRefreshAll} />
+
       {/* 1. CALLING AGENT CONSOLE HERO BANNER */}
       <div className="calling-console-hero">
         {/* Top Row: Identity & Status + Navigation Action Buttons */}
@@ -1586,10 +976,7 @@ export function CallingAgentView({
                 <div>
                   <b
                     style={{ cursor: "pointer", color: "var(--brand)" }}
-                    onClick={() => {
-                      setActiveTab("tickets");
-                      setActiveSection("tasks");
-                    }}
+                    onClick={() => navigate("/calling/tasks")}
                   >
                     {t.title || t.id}
                   </b>

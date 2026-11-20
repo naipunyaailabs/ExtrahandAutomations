@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..integrations.mapping import IST
+from . import handoff, ivr
 from ..models import (
     CallAttempt,
     CustomerFeedback,
@@ -40,6 +41,9 @@ FEEDBACK_DIGIT_MAP = {
 
 def is_within_calling_hours(db: Session) -> bool:
     """Checks whether current Indian Standard Time falls within permitted contact hours."""
+    from .common import within_calling_hours
+
+    return within_calling_hours(db)
     s = runtime_settings(db)
     now_ist = datetime.now(UTC).astimezone(IST).time()
     try:
@@ -53,37 +57,8 @@ def is_within_calling_hours(db: Session) -> bool:
 
 
 def get_feedback_script(ticket: Ticket, helper_name: str | None, language: str = "en") -> str:
-    """Generates the localized AI voice prompt for customer feedback."""
-    s = get_settings()
-    cust = ticket.customer_name or "Valued Customer"
-    task = ticket.title or ticket.category or "service"
-    helper = helper_name or ticket.assignee_name or f"our {get_settings().company_name} partner"
-
-    lang = (language or "en").lower()
-    if lang.startswith("te"):
-        # Telugu IVR script
-        return (
-            f"నమస్కారం {cust}! {s.company_name} కస్టమర్ కేర్ నుండి కాల్ చేస్తున్నాము. "
-            f"హెల్పర్ {helper} అందించిన {task} సర్వీస్ పై మీ అనుభవం ఎలా ఉంది? "
-            "దయచేసి 1 నుండి 5 వరకు రేటింగ్ ఇవ్వండి. 5 అంటే అద్భుతం, 1 అంటే అసంతృప్తి. "
-            "లేదా మళ్లీ కాల్ కొరకు 9 నొక్కండి."
-        )
-    elif lang.startswith("hi"):
-        # Hindi IVR script
-        return (
-            f"नमस्ते {cust}! {s.company_name} कस्टमर केयर से कॉल है। "
-            f"हेल्पर {helper} द्वारा दी गई {task} सेवा पर आपका अनुभव कैसा रहा? "
-            "कृपया 1 से 5 के बीच रेटिंग दें। 5 बहुत अच्छा, 1 असंतोषजनक। "
-            "या दोबारा कॉल के लिए 9 दबाएं।"
-        )
-    else:
-        # English IVR script
-        return (
-            f"Hello {cust}! This is {s.company_name} Customer Care calling regarding your recent {task} service "
-            f"completed by helper {helper}. "
-            "On a scale of 1 to 5, where 5 is excellent and 1 is unsatisfactory, how would you rate your overall experience? "
-            "Press 1 to 5 on your phone keypad, or press 9 if you would like us to call you back later."
-        )
+    """The customer feedback prompt. The IVR speaks Telugu only, so ``language`` no longer changes it."""
+    return ivr.join(ivr.feedback_parts(ticket, helper_name))
 
 
 def start_customer_feedback_call(
@@ -131,9 +106,18 @@ def start_customer_feedback_call(
         f"Initiated {language.upper()} feedback call to customer {ticket.customer_name or phone} ({trigger})",
     )
 
-    if settings.telephony_provider == "twilio":
-        from ..telephony.twilio import start_call
-        start_call(attempt)
+    if settings.telephony_provider != "simulator":
+        from .dispatch import get_provider_safe
+
+        provider, provider_error = get_provider_safe()
+        try:
+            if provider is None:
+                raise RuntimeError(provider_error)
+            attempt.provider_call_id = provider.place_call(attempt)
+            attempt.status = "ringing"
+        except Exception as e:  # noqa: BLE001 - a provider problem fails this call, not the caller
+            attempt.status, attempt.outcome, attempt.error, attempt.ended_at = "ended", "failed", str(e)[:500], utcnow()
+            log_event(db, ticket.id, "call_failed", f"Feedback call to {ticket.customer_name or phone} failed: {e}")
 
     return attempt
 
@@ -200,8 +184,11 @@ def process_feedback_outcome(
         transcript = f"[AI Voice Agent]: {attempt.script}\n[Outcome]: No customer keypad input received."
         summary = f"Customer feedback call ended with outcome '{attempt.outcome or 'no_answer'}'."
 
-    attempt.transcript = transcript
-    attempt.summary = summary
+    if attempt.handoff_json:  # the voice agent recorded the real conversation: keep it
+        summary = attempt.summary or summary
+    else:
+        attempt.transcript = transcript
+        attempt.summary = summary
 
     # Calculate call duration
     if attempt.answered_at and attempt.ended_at:
@@ -293,6 +280,11 @@ def on_feedback_call_finished(db: Session, attempt: CallAttempt) -> None:
     elif attempt.digits and attempt.digits[-1] in ("1", "2", "3", "4", "5", "9"):
         digit = attempt.digits[-1]
 
+    info = handoff.result_of(attempt)
+    if info and info.get("kind") == "rating":
+        process_feedback_outcome(db, attempt, digit=digit, comment=info.get("details") or None,
+                                 complaint_category=info.get("complaint_category") or "none")
+        return
     process_feedback_outcome(db, attempt, digit=digit)
 
 
@@ -314,6 +306,10 @@ def process_due_feedback_calls(db: Session) -> int:
             Ticket.status.in_(["completed", "closed"]),
             Ticket.customer_phone.isnot(None),
             Ticket.updated_at <= cutoff,
+            # The job's own date, not when we first saw the ticket: a first sync brings in months of completed
+            # jobs that must never be called about.
+            Ticket.scheduled_at.isnot(None),
+            Ticket.scheduled_at >= utcnow() - timedelta(hours=r.feedback_call_max_age_hours),
         )
         .all()
     )
@@ -324,6 +320,13 @@ def process_due_feedback_calls(db: Session) -> int:
         existing_feedback = db.query(CustomerFeedback).filter(CustomerFeedback.ticket_id == t.id).first()
         if existing_feedback:
             continue
+        from ..models import WhatsAppFeedbackRequest
+
+        asked_on_whatsapp = (db.query(WhatsAppFeedbackRequest.id)
+                             .filter(WhatsAppFeedbackRequest.ticket_id == t.id,
+                                     WhatsAppFeedbackRequest.status.in_(("sending", "sent", "answered"))).first())
+        if asked_on_whatsapp:
+            continue  # already asked on WhatsApp
 
         existing_call = (
             db.query(CallAttempt)
@@ -344,7 +347,43 @@ def process_due_feedback_calls(db: Session) -> int:
                 trigger="auto_worker",
             )
             started += 1
+            db.commit()  # as each call is placed: the person may answer before the batch is done
         except Exception as e:
+            db.rollback()
             log.warning("Could not auto-trigger feedback for ticket %s: %s", t.id, e)
 
+    return started
+
+
+def _due_callback_query(db: Session):
+    """Customers who asked to be called back and whose time has come. ``== True``, not ``.is_(True)``: SQL Server
+    has no ``IS 1``."""
+    return db.query(CustomerFeedback).filter(
+        CustomerFeedback.callback_requested == True,  # noqa: E712
+        CustomerFeedback.callback_scheduled_at <= utcnow())
+
+
+def process_due_feedback_callbacks(db: Session) -> int:
+    """Worker job: calls back, once, the customers who pressed 9 on the rating call, at the time we promised."""
+    r = runtime_settings(db)
+    if not r.workflow_customer_feedback_enabled or r.emergency_stop_calls:
+        return 0
+    if not is_within_calling_hours(db):
+        return 0
+
+    due = _due_callback_query(db).all()
+    started = 0
+    for feedback in due:
+        calls = db.query(CallAttempt).filter(
+            CallAttempt.ticket_id == feedback.ticket_id, CallAttempt.purpose == "feedback").count()
+        if calls >= 2:  # the original call and its one call-back: asking again never earns a third
+            continue
+        try:
+            start_customer_feedback_call(db, ticket_id=feedback.ticket_id, language=r.preferred_language,
+                                         trigger="callback")
+            started += 1
+            db.commit()  # as each call is placed: the person may answer before the batch is done
+        except Exception as e:  # noqa: BLE001 - e.g. no phone number: skip this customer, keep going
+            db.rollback()
+            log.warning("Could not call back the customer of ticket %s: %s", feedback.ticket_id, e)
     return started

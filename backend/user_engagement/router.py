@@ -33,6 +33,24 @@ def get_engagement_dashboard_endpoint(
     return get_engagement_dashboard(db)
 
 
+@engagement_router.get("/api/engagement/regions")
+def get_regions_endpoint() -> Dict[str, Any]:
+    """Customers and helpers by state and city, from the location saved in each ExtraHand account. Every state and
+    city found in the data is listed, so new ones appear on their own (refreshed every 5 minutes)."""
+    from fastapi import HTTPException
+
+    from .extrahand_data import EngagementDataUnavailable, live_enabled
+    from .regions import regions_summary
+
+    if not live_enabled():
+        raise HTTPException(503, "Regions need live ExtraHand data (EXTRAHAND_MODE=live).")
+    try:
+        data = regions_summary()
+        return data if data is not None else {"loading": True}
+    except EngagementDataUnavailable as exc:
+        raise HTTPException(503, f"ExtraHand is not reachable right now: {exc}") from exc
+
+
 @engagement_router.get("/api/engagement/categories")
 def get_customer_categories_endpoint(
     month: Optional[str] = Query(default=None, pattern=r"^\d{4}-\d{2}$"),

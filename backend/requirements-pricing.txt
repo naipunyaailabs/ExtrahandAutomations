@@ -1,0 +1,3 @@
+# Optional: lets the pricing agent read pages that need JavaScript. Without it the agent fetches plain HTML.
+# After installing, once: /opt/extrahand/venv/bin/crawl4ai-setup   (downloads the headless browser)
+crawl4ai>=0.7

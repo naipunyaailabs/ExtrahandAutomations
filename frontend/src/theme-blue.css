@@ -1256,3 +1256,63 @@ h1, h2, h3, h4, h5, h6 {
   background: #94a3b8;
 }
 
+
+
+/* 7. COMPETITIVE PRICING (Magenta - a colour no other agent uses) */
+.kpi-card-pricing::before {
+  background: linear-gradient(90deg, #f0abfc, #d946ef, #c026d3, #f0abfc) !important;
+}
+:root[data-theme="light"] .kpi-card-pricing {
+  border: 1.5px solid #f5d0fe !important;
+  box-shadow: 0 4px 18px -2px rgba(192, 38, 211, 0.12), 0 1px 3px rgba(0, 0, 0, 0.02) !important;
+}
+:root[data-theme="light"] .kpi-card-pricing:hover {
+  border-color: #c026d3 !important;
+  box-shadow: 0 16px 36px -8px rgba(192, 38, 211, 0.28) !important;
+}
+:root[data-theme="light"] .kpi-card-pricing:hover .hero-metric-box {
+  border-color: #f5d0fe !important;
+}
+:root[data-theme="dark"] .kpi-card-pricing,
+:root:not([data-theme="light"]) .kpi-card-pricing {
+  border: 1.5px solid rgba(217, 70, 239, 0.35) !important;
+}
+:root[data-theme="dark"] .kpi-card-pricing:hover,
+:root:not([data-theme="light"]) .kpi-card-pricing:hover {
+  border-color: #e879f9 !important;
+  box-shadow: 0 18px 40px -8px rgba(217, 70, 239, 0.35) !important;
+}
+:root[data-theme="light"] .kpi-card-pricing .kpi-hero-sub,
+:root[data-theme="light"] .kpi-card-pricing .kpi-hero-action,
+:root[data-theme="light"] .hero-metric-val.val-pricing {
+  color: #a21caf !important;
+}
+:root[data-theme="dark"] .kpi-card-pricing .kpi-hero-sub,
+:root:not([data-theme="light"]) .kpi-card-pricing .kpi-hero-sub,
+:root[data-theme="dark"] .kpi-card-pricing .kpi-hero-action,
+:root:not([data-theme="light"]) .kpi-card-pricing .kpi-hero-action,
+:root[data-theme="dark"] .hero-metric-val.val-pricing,
+:root:not([data-theme="light"]) .hero-metric-val.val-pricing {
+  color: #e879f9 !important;
+}
+.icon-pricing-wrap {
+  background: #fdf4ff !important;
+  color: #c026d3 !important;
+  border: 1.5px solid #f5d0fe !important;
+  box-shadow: 0 4px 16px rgba(192, 38, 211, 0.18);
+}
+:root[data-theme="dark"] .icon-pricing-wrap {
+  background: rgba(217, 70, 239, 0.18) !important;
+  color: #e879f9 !important;
+  border: 1.5px solid rgba(217, 70, 239, 0.45) !important;
+}
+.pill-pricing {
+  background: rgba(217, 70, 239, 0.15) !important;
+  color: #e879f9 !important;
+  border: 1px solid rgba(217, 70, 239, 0.35) !important;
+}
+:root[data-theme="light"] .pill-pricing {
+  background: #fdf4ff !important;
+  color: #a21caf !important;
+  border: 1px solid #f5d0fe !important;
+}

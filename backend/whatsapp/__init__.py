@@ -1,14 +1,14 @@
 # WhatsApp Automation Service (Folder B)
-# Integration with OpenWA (Open Source WhatsApp API Gateway)
+# Sends through the official Meta WhatsApp Business Cloud API (meta_client.py)
 
-from .openwa_client import OpenWAClient, get_openwa_client
+from .meta_client import MetaWhatsAppClient, get_meta_whatsapp_client
 from .service import WhatsAppDispatchService, get_whatsapp_service
 from .router import router as whatsapp_router
 from .agent import WhatsAppTaskDispatchAgent, get_whatsapp_dispatch_agent
 
 __all__ = [
-    "OpenWAClient",
-    "get_openwa_client",
+    "MetaWhatsAppClient",
+    "get_meta_whatsapp_client",
     "WhatsAppDispatchService",
     "get_whatsapp_service",
     "whatsapp_router",

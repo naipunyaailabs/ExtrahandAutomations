@@ -1,6 +1,9 @@
+import json
 from datetime import datetime
 
 from ..models import CallAttempt, DispatchRun, Escalation, Event, FollowUp, Helper, Ticket
+from ..services import handoff
+from ..integrations.mapping import task_schedule_end
 
 
 def iso(dt: datetime | None) -> str | None:
@@ -55,11 +58,17 @@ def ticket_out(t: Ticket) -> dict:
         "id": t.id, "title": t.title, "description": t.description, "category": t.category,
         "status": t.status, "dispatch_status": t.dispatch_status, "budget": t.budget,
         "address": t.address, "city": t.city, "lat": t.lat, "lng": t.lng,
-        "scheduled_at": iso(t.scheduled_at), "booking_source": t.booking_source,
+        "scheduled_at": iso(t.scheduled_at), "scheduled_end_at": iso(task_schedule_end(raw)),
+        "booking_source": t.booking_source,
         "customer": {"id": t.customer_id, "name": t.customer_name, "phone": t.customer_phone, "email": t.customer_email},
         "assignee": {"id": t.assignee_id, "profile_id": t.assignee_profile_id, "name": t.assignee_name,
                      "phone": t.assignee_phone} if t.assignee_id else None,
         "assignment_local_only": t.assignment_local_only,
+        "assigned_via": t.assigned_via or ("extrahand" if t.assignee_id and not t.assignment_local_only else
+                                           "call" if t.assignee_id else None),
+        "assigned_at": iso(t.assigned_at),
+        "extrahand_push": t.extrahand_push,
+        "extrahand_push_error": t.extrahand_push_error,
         "created_at": iso(t.created_at),
         "booked_at": booked_at.astimezone(timezone.utc).replace(tzinfo=None).isoformat() + "Z" if booked_at else None,
         "synced_at": iso(t.synced_at), "updated_at": iso(t.updated_at),
@@ -71,7 +80,15 @@ def ticket_out(t: Ticket) -> dict:
     }
 
 
-def call_out(a: CallAttempt, ticket: Ticket | None = None) -> dict:
+def _trail(a: CallAttempt) -> list[dict]:
+    try:
+        items = json.loads(a.timeline) if a.timeline else []
+    except ValueError:
+        return []
+    return [i for i in items if isinstance(i, dict)] if isinstance(items, list) else []
+
+
+def call_out(a: CallAttempt, ticket: Ticket | None = None, detail: bool = False) -> dict:
     d = {
         "id": a.id, "ticket_id": a.ticket_id, "purpose": a.purpose, "run_id": a.run_id, "followup_id": a.followup_id,
         "helper_id": a.helper_id, "helper_name": a.helper_name,
@@ -85,6 +102,10 @@ def call_out(a: CallAttempt, ticket: Ticket | None = None) -> dict:
     }
     if ticket:
         d["ticket_title"] = ticket.title
+    if detail:  # the list stays light: the trail is only for the call detail page
+        d["timeline"] = _trail(a)
+    info = handoff.result_of(a)  # what the voice agent recorded; its transcript is already in "transcript"
+    d["handoff"] = {k: v for k, v in info.items() if k != "transcript"} if info else None
     return d
 
 

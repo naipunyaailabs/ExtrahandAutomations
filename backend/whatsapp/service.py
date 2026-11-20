@@ -3,11 +3,13 @@ import logging
 from typing import Optional
 from sqlalchemy.orm import Session
 
+from app.integrations.mapping import ist_text
 from app.branding import task_link
 from app.config import get_settings
 from app.database import SessionLocal, session_scope
 from app.models import Ticket, Helper, DispatchStatus
-from .openwa_client import get_openwa_client
+from .meta_client import get_meta_whatsapp_client
+from .metering import tagged
 from .models import WhatsAppDispatchPayload, WhatsAppMessageResponse
 
 logger = logging.getLogger("whatsapp.service")
@@ -17,7 +19,7 @@ class WhatsAppDispatchService:
     """Service handling WhatsApp automated dispatches and reminders for ExtraHand."""
 
     def __init__(self):
-        self.client = get_openwa_client()
+        self.client = get_meta_whatsapp_client()  # official Meta WhatsApp Cloud API
         self.settings = get_settings()
 
     def format_task_dispatch_message(self, payload: WhatsAppDispatchPayload) -> str:
@@ -62,21 +64,39 @@ class WhatsAppDispatchService:
         )
 
     async def send_dispatch_notification(self, payload: WhatsAppDispatchPayload) -> WhatsAppMessageResponse:
-        """Send task dispatch alert to helper's WhatsApp."""
-        message = self.format_task_dispatch_message(payload)
+        """Send task dispatch alert to helper's WhatsApp (Utility template once Meta approved it, else text)."""
         logger.info("Sending WhatsApp dispatch for ticket %s to helper %s (%s)", payload.ticket_id, payload.helper_id, payload.helper_phone)
-        return await self.client.send_text_message(to=payload.helper_phone, message=message)
+        payout = str(payload.payout)
+        if payout and payout[0].isdigit():
+            payout = f"{self.settings.currency_symbol}{payout}"
+        with tagged("automation", "work_order", payload.ticket_id, override=False):
+            return await send_task_alert(
+                self.client,
+                phone=payload.helper_phone,
+                ticket_id=payload.ticket_id,
+                values=[
+                    (payload.helper_name or "Partner").split(" ")[0] or "Partner",
+                    payload.service or payload.task_title,
+                    payload.task_title,
+                    payload.location,
+                    payload.scheduled_time,
+                    payout,
+                ],
+                fallback_text=self.format_task_dispatch_message(payload),
+            )
 
     async def send_task_assigned_notification(self, payload: WhatsAppDispatchPayload) -> WhatsAppMessageResponse:
         """Send work assigned notification to helper with in-app task details link."""
         message = self.format_task_assigned_message(payload)
         logger.info("Sending WhatsApp work assignment confirmation for ticket %s to helper %s (%s)", payload.ticket_id, payload.helper_id, payload.helper_phone)
-        return await self.client.send_text_message(to=payload.helper_phone, message=message)
+        with tagged("automation", "assignment", payload.ticket_id, override=False):
+            return await self.client.send_text_message(to=payload.helper_phone, message=message)
 
     async def send_reminder(self, helper_phone: str, helper_name: str, task_title: str, scheduled_time: str, address: str) -> WhatsAppMessageResponse:
         """Send shift reminder message to helper."""
         message = self.format_reminder_message(helper_name, task_title, scheduled_time, address)
-        return await self.client.send_text_message(to=helper_phone, message=message)
+        with tagged("automation", "reminder", override=False):
+            return await self.client.send_text_message(to=helper_phone, message=message)
 
     def get_location_helpers_for_task(
         self,
@@ -95,7 +115,9 @@ class WhatsAppDispatchService:
             if not ticket:
                 return None, []
 
-            from app.services.dispatch import find_candidates, km_between, helper_matches_ticket_service
+            from app.services.dispatch import find_candidates, helper_matches_ticket_service
+            from app.services.places import location_match
+            from app.services.real_data import is_real_helper
             from app.services.common import runtime_settings
 
             rt = runtime_settings(db)
@@ -136,25 +158,14 @@ class WhatsAppDispatchService:
                 if clean_phone and clean_phone in seen_phones:
                     continue
 
-                # 1. Location match: strict coordinates within radius OR city match fallback
-                dist = None
-                has_coords = (
-                    ticket.lat is not None and ticket.lng is not None and
-                    h.lat is not None and h.lng is not None and
-                    (ticket.lat != 0.0 or ticket.lng != 0.0) and
-                    (h.lat != 0.0 or h.lng != 0.0)
+                if not is_real_helper(h):
+                    continue  # tester / test / mock account: never messaged
+                # 1. Location: GPS distance, else places learned from ExtraHand data (PIN / city / areas)
+                matched, dist = location_match(
+                    db, ticket, effective_radius, lat=h.lat, lng=h.lng, city=h.city, address=h.address,
+                    pincode=h.pincode, work_areas=h.work_areas,
                 )
-                if has_coords:
-                    dist = km_between(ticket.lat, ticket.lng, h.lat, h.lng)
-                    if dist is None or dist > effective_radius:
-                        continue
-                elif ticket.city and h.city:
-                    t_city = ticket.city.strip().lower()
-                    h_city = h.city.strip().lower()
-                    if t_city not in h_city and h_city not in t_city:
-                        continue
-                    dist = 4.5
-                else:
+                if not matched:
                     continue
 
                 # 2. Strict Service / Skill match
@@ -216,7 +227,7 @@ class WhatsAppDispatchService:
 
             loc_str = ticket.city or ticket.address or "Area Location"
             service_str = ticket.category or ticket.title or "General Service"
-            schedule_str = ticket.scheduled_at.strftime("%d %b %Y, %I:%M %p") if ticket.scheduled_at else "Immediate / Flexible"
+            schedule_str = ist_text(ticket.scheduled_at, "%d %b %Y, %I:%M %p", "Immediate / Flexible")
             payout_val = ticket.budget if (ticket.budget and ticket.budget > 0) else 500
 
             if not helpers:
@@ -251,10 +262,12 @@ class WhatsAppDispatchService:
                     location=loc_str,
                     scheduled_time=schedule_str,
                     payout=str(payout_val),
+                    service=service_str,
                 )
 
                 async with sem:
-                    resp = await self.send_dispatch_notification(payload)
+                    with tagged("automation", "broadcast", ticket.id):
+                        resp = await self.send_dispatch_notification(payload)
 
                 return {
                     "helper_id": h.get("helper_id"),
@@ -310,7 +323,7 @@ class WhatsAppDispatchService:
         logger.info("Inbound WhatsApp message from %s: '%s'", from_phone, text)
 
         is_accept = text in ("1", "ACCEPT", "YES", "CONFIRM")
-        is_reject = text in ("2", "REJECT", "NO", "DECLINE")
+        is_reject = text in ("2", "REJECT", "NO", "DECLINE", "PASS")
 
         if not (is_accept or is_reject):
             return {"action": "ignored", "reason": "unrecognized_keyword", "text": body}
@@ -326,28 +339,41 @@ class WhatsAppDispatchService:
 
             if is_accept:
                 logger.info("Helper %s accepted job via WhatsApp!", helper.name or helper.id)
-                # Automatically assign to the open/dispatching ticket
-                ticket = db.query(Ticket).filter(
-                    Ticket.assignee_id.is_(None),
-                    Ticket.dispatch_status.in_([DispatchStatus.NEW, DispatchStatus.DISPATCHING])
-                ).order_by(Ticket.created_at.desc()).first()
+                # Assign the task this helper was alerted about (latest alert still open), never just any open task
+                ticket = _alerted_open_ticket(db, clean_phone)
 
                 assigned_ticket_id = None
                 if ticket:
+                    from app.services.assignment import mark_local_assignment, push_assignment_later
+                    from app.services.common import log_event
+                    from app.services.dispatch import active_run, cancel_dispatch
+
+                    if active_run(db, ticket.id):
+                        cancel_dispatch(db, ticket.id, f"{helper.name or 'Helper'} accepted via WhatsApp")
                     ticket.assignee_id = helper.id
                     ticket.assignee_profile_id = helper.profile_id
                     ticket.assignee_name = helper.name
                     ticket.assignee_phone = helper.phone
                     ticket.dispatch_status = DispatchStatus.ASSIGNED
+                    mark_local_assignment(ticket, "whatsapp")
                     assigned_ticket_id = ticket.id
-                    try:
-                        from app.services.common import log_event
-                        log_event(db, ticket.id, "whatsapp_accepted", f"Helper {helper.name} ({clean_phone}) accepted via WhatsApp")
-                    except Exception as log_err:
-                        logger.warning("Could not log acceptance event: %s", log_err)
+                    log_event(db, ticket.id, "whatsapp_accepted", f"Helper {helper.name} ({clean_phone}) accepted via WhatsApp")
+                    push_assignment_later(db, ticket.id)
+                    db.commit()
+                    from app.services.followups import schedule_for_ticket
+
+                    schedule_for_ticket(db, ticket)
                     db.commit()
 
-                await self.client.send_text_message(
+                if not ticket:
+                    with tagged("automation", "reply"):
+                        await self.client.send_text_message(
+                            to=from_phone,
+                            message="🙏 Thank you! This task has already been taken. We'll send you the next one nearby.",
+                        )
+                    return {"action": "no_open_task", "helper_id": helper.id, "phone": clean_phone}
+                with tagged("automation", "reply", assigned_ticket_id):
+                    await self.client.send_text_message(
                     to=from_phone,
                     message=f"✅ Thank you {helper.name or ''}! You have accepted this booking. Check your app for complete customer details."
                 )
@@ -355,7 +381,8 @@ class WhatsAppDispatchService:
 
             elif is_reject:
                 logger.info("Helper %s declined job via WhatsApp.", helper.name or helper.id)
-                await self.client.send_text_message(
+                with tagged("automation", "reply"):
+                    await self.client.send_text_message(
                     to=from_phone,
                     message="👌 Understood. We have released this task and will offer it to the next available helper."
                 )
@@ -364,7 +391,68 @@ class WhatsAppDispatchService:
         return {"action": "processed"}
 
 
+def _alerted_open_ticket(db: Session, phone_digits: str) -> Optional[Ticket]:
+    """The newest task this phone got a WhatsApp alert for that is still open and unassigned."""
+    from app.models import WhatsAppMessage
+
+    last10 = phone_digits[-10:]
+    if len(last10) < 10:
+        return None
+    rows = (
+        db.query(WhatsAppMessage.ticket_id)
+        .filter(WhatsAppMessage.direction == "out", WhatsAppMessage.ticket_id.isnot(None),
+                WhatsAppMessage.phone.like(f"%{last10}"))
+        .order_by(WhatsAppMessage.created_at.desc())
+        .limit(50)
+        .all()
+    )
+    seen: set[str] = set()
+    for (ticket_id,) in rows:
+        if ticket_id in seen:
+            continue
+        seen.add(ticket_id)
+        t = db.get(Ticket, ticket_id)
+        if t and not t.assignee_id and t.dispatch_status in (DispatchStatus.NEW, DispatchStatus.DISPATCHING):
+            return t
+    return None
+
+
 _whatsapp_service: Optional[WhatsAppDispatchService] = None
+
+# Utility template for new-task alerts to helpers (location + service match). Until Meta approves it the alert
+# goes out as the old free-form text, which Meta only delivers inside the 24-hour customer-service window.
+TASK_ALERT_TEMPLATE = "extrahand_task_available_nearby"
+
+
+def _alert_values(values: list) -> list[str]:
+    """Readable template values: "MEDOJU ravi" -> "Medoju", "appliance_repair" -> "Appliance Repair", "Rs229.0" -> "Rs229"."""
+    import re
+
+    out = [str(v).strip() if v not in (None, "") else "-" for v in values]
+    if out:
+        first = out[0].split(" ")[0]
+        out[0] = first[:1].upper() + first[1:].lower() if first else "Partner"
+    if len(out) > 1 and out[1] != "-":
+        svc = out[1].replace("_", " ").replace("-", " ").strip()
+        out[1] = svc.title() if svc.islower() or svc.isupper() else svc
+    if len(out) > 5:
+        out[5] = re.sub(r"(\d)\.0+\b", r"\1", out[5])
+    return out
+
+
+async def send_task_alert(client, phone: str, ticket_id: str, values: list, fallback_text: str) -> WhatsAppMessageResponse:
+    """values = [first name, service, task, location, schedule, payout] -> {{1}}..{{6}}; the "View task" button
+    opens the task. Uses the approved Utility template, otherwise the plain text."""
+    try:
+        tmpl = await client.get_template_def(TASK_ALERT_TEMPLATE)
+    except Exception:  # noqa: BLE001
+        tmpl = None
+    if tmpl and str(tmpl.get("status", "")).upper() == "APPROVED":
+        variables = {str(i + 1): v for i, v in enumerate(_alert_values(values))}
+        return await client.send_template_message(
+            to=phone, template_name=TASK_ALERT_TEMPLATE, variables=variables, button_slug=ticket_id,
+        )
+    return await client.send_text_message(to=phone, message=fallback_text)
 
 
 def get_whatsapp_service() -> WhatsAppDispatchService:
@@ -374,8 +462,61 @@ def get_whatsapp_service() -> WhatsAppDispatchService:
     return _whatsapp_service
 
 
+def whatsapp_automation_active() -> bool:
+    """True only after someone clicked Activate on WhatsApp Automation (it starts deactive)."""
+    from app.database import SessionLocal
+    from app.services.common import runtime_settings
+
+    try:
+        with SessionLocal() as db:
+            return bool(runtime_settings(db).whatsapp_automation_active)
+    except Exception as err:  # fail closed: never send when the switch cannot be read
+        logger.warning("Could not read WhatsApp Automation switch: %s", err)
+        return False
+
+
+# Every automatic path (upload, sync, after-sync catch-up, worker) claims a task here before alerting helpers,
+# so one task is alerted once: the paths used to check different "already sent" events, and the event was only
+# written after all sends finished, so two paths could both send (each copy is a billed message).
+TASK_ALERT_EVENTS = ("whatsapp_task_alert_started", "whatsapp_agent_broadcast", "whatsapp_location_broadcast")
+_ALERT_LOCK = __import__("threading").Lock()
+_ALERTED: set[str] = set()
+
+
+def claim_task_alert(ticket_id: str) -> bool:
+    """True once per task: the caller may alert helpers. False if already alerted / claimed, or the task is past."""
+    from datetime import timedelta
+
+    from app.models import Event, utcnow
+    from app.services.common import log_event
+
+    with _ALERT_LOCK:
+        if ticket_id in _ALERTED:
+            return False
+        with SessionLocal() as db:
+            t = db.get(Ticket, ticket_id)
+            if t is None:
+                return False
+            target = t.scheduled_at or t.created_at
+            if target and target < utcnow() - timedelta(hours=2):
+                return False  # the task time has passed: nobody is alerted
+            done = db.query(Event.id).filter(Event.ticket_id == ticket_id, Event.kind.in_(TASK_ALERT_EVENTS)).first()
+            if done:
+                _ALERTED.add(ticket_id)
+                return False
+            log_event(db, ticket_id, "whatsapp_task_alert_started", "Automatic WhatsApp task alert to matching helpers started")
+            db.commit()
+        _ALERTED.add(ticket_id)
+        return True
+
+
 def trigger_whatsapp_task_broadcast(ticket_id: str, radius_km: Optional[float] = None) -> None:
     """Non-blocking background thread to broadcast a newly uploaded/synced customer task to all helpers matching location and service."""
+    if not whatsapp_automation_active():
+        logger.info("WhatsApp Automation is DEACTIVE; skipping auto broadcast for ticket %s", ticket_id)
+        return
+    if not claim_task_alert(ticket_id):
+        return
     import threading
     def _runner():
         import asyncio

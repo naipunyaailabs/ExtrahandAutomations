@@ -1,16 +1,19 @@
-import React, { useState, useRef, useMemo } from "react";
+import React, { useState, useRef, useMemo, useEffect } from "react";
 import {
   AlertCircle,
+  BookmarkPlus,
   CheckCircle2,
   CheckCheck,
   Download,
   Edit3,
   Eye,
   FileSpreadsheet,
+  Image as ImageIcon,
   Plus,
   RefreshCw,
   Search,
   Send,
+  Sparkles,
   Trash2,
   Upload,
   UserPlus,
@@ -18,14 +21,41 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../api";
-import { countryDigits, fillTemplate, toE164, useBranding } from "../branding";
+import { countryDigits, toE164, useBranding } from "../branding";
 import { useToast, WhatsAppIcon } from "./ui";
 import { ChannelActiveButton } from "./WhatsAppChannelToggle";
+import { NewTemplateDialog } from "./NewTemplateDialog";
+import { DeleteTemplateDialog } from "./DeleteTemplateDialog";
 import type {
   BulkMessageResponse,
   BulkRecipient,
   WhatsAppStatus,
+  WhatsAppTemplate,
 } from "../types";
+
+export interface CustomTemplate {
+  id: string;
+  name: string;
+  text: string;
+}
+
+const DEFAULT_CUSTOM_TEMPLATES: CustomTemplate[] = [
+  {
+    id: "custom_festive_offer",
+    name: "Festive Promotion & Discount",
+    text: "Namaste {name}! 🎉 ExtraHand is offering an exclusive ₹200 discount on all home maintenance, plumbing, and electrical services this week. Book your expert partner now: {link}. Reply STOP to unsubscribe.",
+  },
+  {
+    id: "custom_service_alert",
+    name: "General Broadcast Announcement",
+    text: "Hello {name}, this is an important service alert from ExtraHand: {message}. Please reach out if you have any questions or reply directly here. Thank you for choosing ExtraHand!",
+  },
+  {
+    id: "custom_technician_nearby",
+    name: "Nearby Available Helper Alert",
+    text: "Hello {name}! 🛠️ Verified ExtraHand service partners are available in your area today for urgent repairs, cleaning, and maintenance. Reply YES or call us to book instantly!",
+  },
+];
 
 export interface ContactEntry {
   id: string;
@@ -43,6 +73,18 @@ interface WhatsAppBulkMessagingProps {
   bulkActive?: boolean;
   onToggleBulk?: () => void;
   isTogglingChannel?: string | null;
+}
+
+/** A custom message in Meta's template form: {name} → {{1}}, {message}/{discount}/{task} → {{2}}, {link} → {{3}}.
+ *  {company} becomes plain text; {phone} is dropped. Numbers are kept in order, as Meta requires. */
+function toMetaTemplateBody(text: string, globals: Record<string, string>): string {
+  let out = text.replace(/\{\s*company\s*\}/gi, globals.company || "ExtraHand").replace(/\s*\{\s*phone\s*\}/gi, "");
+  out = out.replace(/\{\s*name\s*\}/gi, "{{1}}").replace(/\{\s*(message|discount|task)\s*\}/gi, "{{2}}");
+  // {{3}} is only valid when {{2}} is also used; otherwise write the link out as text.
+  out = /\{\{2\}\}/.test(out)
+    ? out.replace(/\{\s*link\s*\}/gi, "{{3}}")
+    : out.replace(/\{\s*link\s*\}/gi, globals.link || "https://extrahand.in");
+  return out;
 }
 
 export function WhatsAppBulkMessaging({
@@ -81,12 +123,168 @@ export function WhatsAppBulkMessaging({
     () => ({ link: branding.offers_url, company: branding.company_name }),
     [branding.offers_url, branding.company_name]
   );
-  const [messageText, setMessageText] = useState<string>(() =>
-    fillTemplate(branding.bulk_message_template, globalVariables)
+  // Custom Templates Preset State
+  const [customTemplates, setCustomTemplates] = useState<CustomTemplate[]>(() => {
+    try {
+      const stored = localStorage.getItem("extrahand_custom_templates");
+      if (stored) return JSON.parse(stored);
+    } catch (e) {
+      // ignore
+    }
+    return DEFAULT_CUSTOM_TEMPLATES;
+  });
+
+  const [messageText, setMessageText] = useState<string>(() => DEFAULT_CUSTOM_TEMPLATES[0].text);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>(() => DEFAULT_CUSTOM_TEMPLATES[0].id);
+
+  // Meta Approved Templates
+  const [templates, setTemplates] = useState<WhatsAppTemplate[]>([]);
+
+  const [newTemplateOpen, setNewTemplateOpen] = useState(false);
+  // Message the "Submit to Meta" dialog starts from (undefined = blank starter template).
+  const [newTemplateBody, setNewTemplateBody] = useState<string | undefined>(undefined);
+  const [deleteTemplateOpen, setDeleteTemplateOpen] = useState(false);
+
+  // Bulk is marketing: only the bulk template list (3 ExtraHand marketing templates + ones created here)
+  const loadTemplates = React.useCallback(() => {
+    api.whatsapp
+      .bulkTemplates()
+      .then((data) => {
+        if (Array.isArray(data)) setTemplates(data);
+      })
+      .catch((err) => console.warn("Failed to load templates", err));
+  }, []);
+
+  useEffect(() => {
+    loadTemplates();
+  }, [loadTemplates]);
+
+  const isMetaTemplate = useMemo(() => {
+    return templates.some((t) => (t.id || t.name) === selectedTemplateId);
+  }, [templates, selectedTemplateId]);
+
+  const isCustomTemplate = !isMetaTemplate;
+
+  // Values for a Meta template's blanks ({{2}}, {{3}}, ...); {{1}} is always each recipient's name
+  const [templateVars, setTemplateVars] = useState<Record<string, string>>({});
+  const selectedMeta = useMemo(
+    () => (isMetaTemplate ? templates.find((t) => (t.id || t.name) === selectedTemplateId) : undefined),
+    [isMetaTemplate, templates, selectedTemplateId],
   );
+  const templateSlots = useMemo(() => {
+    const fromBody = [...(selectedMeta?.template ?? "").matchAll(/\{\{\s*(\d+)\s*\}\}/g)].map((m) => m[1]);
+    return [...new Set(fromBody)].filter((n) => n !== "1").sort((a, b) => +a - +b);
+  }, [selectedMeta]);
+  /** Meta rejects blanks with new-lines, tabs or 4+ spaces (#132018); the backend cleans them the same way. */
+  const cleanVar = (v: string) => v.replace(/[\r\n\t]+/g, " ").replace(/ {4,}/g, " ").trim();
+  const slotLabel = (n: string) => (n === "2" ? "Offer / update" : n === "3" ? "Link" : `Value ${n}`);
+
+  const handleSelectTemplate = (tmplId: string) => {
+    setSelectedTemplateId(tmplId);
+    if (!tmplId || tmplId === "custom_new") {
+      setMessageText("");
+      return;
+    }
+    const custom = customTemplates.find((t) => t.id === tmplId);
+    if (custom) {
+      setMessageText(custom.text);
+      return;
+    }
+    const t = templates.find((x) => x.id === tmplId || x.name === tmplId);
+    if (t && t.template) {
+      setMessageText(t.template);
+      setTemplateVars({ "3": branding.offers_url || "https://extrahand.in" });
+    }
+  };
+
+  const handleInsertTag = (tag: string) => {
+    if (!textareaRef.current) {
+      setMessageText((prev) => `${prev} ${tag}`);
+      return;
+    }
+    const el = textareaRef.current;
+    const start = el.selectionStart || 0;
+    const end = el.selectionEnd || 0;
+    const next = messageText.substring(0, start) + tag + messageText.substring(end);
+    setMessageText(next);
+    setTimeout(() => {
+      el.focus();
+      el.setSelectionRange(start + tag.length, start + tag.length);
+    }, 50);
+  };
+
+  const handleSaveCustomTemplate = () => {
+    const name = window.prompt("Enter a name for this custom template:", "My Custom Campaign");
+    if (!name || !name.trim()) return;
+    const newTmpl: CustomTemplate = {
+      id: `custom_${Date.now()}`,
+      name: name.trim(),
+      text: messageText,
+    };
+    const updated = [newTmpl, ...customTemplates];
+    setCustomTemplates(updated);
+    try {
+      localStorage.setItem("extrahand_custom_templates", JSON.stringify(updated));
+    } catch (e) {
+      // ignore
+    }
+    setSelectedTemplateId(newTmpl.id);
+    toast.success("Template Saved", `"${name.trim()}" saved to Custom Templates.`);
+  };
+
+  const handleDeleteCustomTemplate = (id: string) => {
+    if (!window.confirm("Are you sure you want to delete this custom template?")) return;
+    const updated = customTemplates.filter((t) => t.id !== id);
+    setCustomTemplates(updated);
+    try {
+      localStorage.setItem("extrahand_custom_templates", JSON.stringify(updated));
+    } catch (e) {
+      // ignore
+    }
+    setSelectedTemplateId("custom_new");
+    setMessageText("");
+    toast.info("Template Deleted", "Custom template removed.");
+  };
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [bubbleMode, setBubbleMode] = useState<"edit" | "preview">("edit");
+  const [bannerImageUrl, setBannerImageUrl] = useState<string>("");
+  const [bannerMediaId, setBannerMediaId] = useState<string>("");
+  const [bannerFileName, setBannerFileName] = useState<string>("");
+  const [bannerServerFile, setBannerServerFile] = useState<string>("");
+  const [isUploadingBanner, setIsUploadingBanner] = useState(false);
+  const bannerFileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleBannerUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploadingBanner(true);
+    setBannerFileName(file.name);
+    try {
+      const res = await api.whatsapp.uploadBanner(file);
+      if (res) {
+        setBannerImageUrl(res.preview_url || res.url);
+        setBannerServerFile(res.filename);
+        if (res.meta_media_id) {
+          setBannerMediaId(res.meta_media_id);
+        }
+        toast.success("Image Uploaded", `Poster "${file.name}" uploaded successfully.`);
+      }
+    } catch (err: any) {
+      toast.error("Upload Failed", err.message || "Could not upload banner image.");
+    } finally {
+      setIsUploadingBanner(false);
+      if (bannerFileInputRef.current) bannerFileInputRef.current.value = "";
+    }
+  };
+
+  const handleClearBanner = () => {
+    setBannerImageUrl("");
+    setBannerMediaId("");
+    setBannerFileName("");
+    setBannerServerFile("");
+    toast.info("Image Removed", "Campaign banner removed.");
+  };
 
   // Execution & Dispatch State
   const [isDispatching, setIsDispatching] = useState(false);
@@ -318,6 +516,13 @@ export function WhatsAppBulkMessaging({
     const sampleName = validContacts.length > 0 && validContacts[0].name ? validContacts[0].name : "{name}";
     const samplePhone = validContacts.length > 0 ? validContacts[0].formattedPhone : "{phone}";
 
+    if (isMetaTemplate) {
+      const name = validContacts.length > 0 && validContacts[0].name ? validContacts[0].name : "Customer";
+      return messageText.replace(/\{\{\s*(\d+)\s*\}\}/g, (_m, n: string) =>
+        n === "1" ? name : cleanVar(templateVars[n] ?? "") || `[${slotLabel(n)}]`,
+      );
+    }
+
     let text = messageText;
     text = text.replace(/\{name\}/g, sampleName);
     text = text.replace(/\{phone\}/g, samplePhone);
@@ -328,7 +533,8 @@ export function WhatsAppBulkMessaging({
     });
 
     return text;
-  }, [messageText, validContacts, globalVariables]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messageText, validContacts, globalVariables, isMetaTemplate, templateVars]);
 
   // Dispatch Bulk Messages Trigger
   const handleSendMessages = async () => {
@@ -347,6 +553,11 @@ export function WhatsAppBulkMessaging({
       toast.error("Message Empty", "Please write or select a message template to send.");
       return;
     }
+    const missing = isMetaTemplate ? templateSlots.filter((n) => !cleanVar(templateVars[n] ?? "")) : [];
+    if (missing.length > 0) {
+      toast.error("Fill the template", `Please fill: ${missing.map(slotLabel).join(", ")}.`);
+      return;
+    }
 
     setIsDispatching(true);
     setDispatchProgress(10);
@@ -362,25 +573,34 @@ export function WhatsAppBulkMessaging({
       const res = await api.whatsapp.sendBulk({
         recipients: recipientsPayload,
         message: messageText,
-        template_id: undefined,
-        variables: globalVariables,
+        template_id: isMetaTemplate ? selectedTemplateId : undefined,
+        image_url: bannerMediaId || bannerImageUrl || undefined,
+        variables: isMetaTemplate
+          ? {
+              ...globalVariables,
+              ...Object.fromEntries(templateSlots.map((n) => [n, cleanVar(templateVars[n] ?? "")])),
+            }
+          : globalVariables,
       });
 
       setDispatchProgress(100);
       setDispatchResult(res);
 
-      const sentCount = (res.sent_count || 0) + (res.simulated_count || 0);
+      const sentCount = res.sent_count || 0;
+      const simulatedCount = res.simulated_count || 0;
       const failedCount = res.failed_count || 0;
       setSessionSent((prev) => prev + sentCount);
       setSessionFailed((prev) => prev + failedCount);
 
       if (sentCount > 0) {
         toast.success(
-          "Broadcast Dispatched!",
-          `Successfully sent ${sentCount} messages (${failedCount} failed).`
+          "Broadcast sent",
+          `Sent ${sentCount} message(s).${failedCount ? ` ${failedCount} failed.` : ""}${simulatedCount ? ` ${simulatedCount} only simulated.` : ""}`
         );
+      } else if (simulatedCount > 0) {
+        toast.info("Test mode only", `${simulatedCount} message(s) were simulated. No real WhatsApp message was sent.`);
       } else {
-        toast.error("Broadcast Failed", `All ${failedCount} messages failed delivery.`);
+        toast.error("Broadcast failed", `All ${failedCount} message(s) failed to send.`);
       }
 
       if (onRefreshStatus) onRefreshStatus();
@@ -643,6 +863,322 @@ export function WhatsAppBulkMessaging({
             </div>
           </div>
 
+          {/* Format / Template Selector */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              padding: "6px 10px",
+              background: "var(--raised, #f8fafc)",
+              borderRadius: "8px",
+              border: "1px solid var(--border)",
+              fontSize: "12px",
+            }}
+          >
+            <span style={{ fontWeight: 600, color: "var(--muted)", whiteSpace: "nowrap" }}>
+              Format:
+            </span>
+            <select
+              value={selectedTemplateId}
+              onChange={(e) => handleSelectTemplate(e.target.value)}
+              className="input"
+              style={{
+                height: "32px",
+                fontSize: "12px",
+                flex: 1,
+                padding: "2px 8px",
+                fontWeight: 600,
+                color: isMetaTemplate ? "#16a34a" : "#0284c7",
+              }}
+            >
+              <optgroup label="✨ Custom Templates (Compose your own)">
+                <option value="custom_new">✏️ New Custom Template (Write your own)</option>
+                {customTemplates.map((ct) => (
+                  <option key={ct.id} value={ct.id}>
+                    📝 {ct.name} (Custom)
+                  </option>
+                ))}
+              </optgroup>
+              <optgroup label="⚡ Meta Approved Templates (Delivers to Anyone)">
+                {templates.map((t) => {
+                  const approved = (t.status ?? "APPROVED") === "APPROVED";
+                  const state = approved ? "Meta Approved" : t.status === "REJECTED" ? "Rejected by Meta" : "Pending approval";
+                  return (
+                    <option key={t.id || t.name} value={t.id || t.name} disabled={!approved}>
+                      {approved ? "⚡" : "⏳"} {t.name || t.id} ({state})
+                    </option>
+                  );
+                })}
+              </optgroup>
+            </select>
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              style={{ fontSize: "12px", height: "32px", padding: "0 10px", whiteSpace: "nowrap" }}
+              onClick={() => {
+                setNewTemplateBody(undefined);
+                setNewTemplateOpen(true);
+              }}
+              title="Create a new marketing template and submit it to Meta for approval"
+            >
+              <Plus size={13} style={{ marginRight: "4px" }} />
+              <span>New Template</span>
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              style={{ height: "32px", padding: "0 8px", color: "#dc2626" }}
+              onClick={() => setDeleteTemplateOpen(true)}
+              disabled={templates.length === 0}
+              title="Remove a Meta template from Bulk Msgs or delete it from Meta"
+              aria-label="Delete template"
+            >
+              <Trash2 size={14} />
+            </button>
+            <DeleteTemplateDialog
+              open={deleteTemplateOpen}
+              templates={templates}
+              initial={isMetaTemplate ? selectedTemplateId : null}
+              onClose={() => setDeleteTemplateOpen(false)}
+              onDone={(name, fromMeta) => {
+                setDeleteTemplateOpen(false);
+                if (selectedTemplateId === name) {
+                  setSelectedTemplateId("custom_new");
+                  setMessageText("");
+                }
+                loadTemplates();
+                toast.success(
+                  fromMeta ? "Template deleted" : "Template removed",
+                  fromMeta ? `"${name}" was deleted from Meta.` : `"${name}" no longer shows in Bulk Msgs. It still exists in Meta.`,
+                );
+              }}
+            />
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              style={{ height: "32px", padding: "0 8px" }}
+              onClick={loadTemplates}
+              title="Refresh templates (check Meta approval status)"
+              aria-label="Refresh templates"
+            >
+              <RefreshCw size={13} />
+            </button>
+            <NewTemplateDialog
+              open={newTemplateOpen}
+              initialBody={newTemplateBody}
+              bannerFilename={bannerServerFile || undefined}
+              bannerPreviewUrl={bannerImageUrl || undefined}
+              onClose={() => setNewTemplateOpen(false)}
+              onCreated={(name) => {
+                setNewTemplateOpen(false);
+                loadTemplates();
+                toast.success("Template submitted", `"${name}" was sent to Meta for approval. It can be used once approved.`);
+              }}
+            />
+          </div>
+
+          {/* Meta template blanks: {{1}} = recipient name, the rest typed here */}
+          {isMetaTemplate && templateSlots.length > 0 && (
+            <div
+              style={{
+                display: "grid",
+                gap: "6px",
+                padding: "8px 10px",
+                background: "rgba(22, 163, 74, 0.05)",
+                border: "1px dashed rgba(22, 163, 74, 0.35)",
+                borderRadius: "8px",
+                fontSize: "12px",
+              }}
+            >
+              <span style={{ color: "var(--muted)" }}>
+                Fill the template. <code>{"{{1}}"}</code> is each contact's name automatically.
+              </span>
+              {templateSlots.map((n) => (
+                <label key={n} style={{ display: "grid", gridTemplateColumns: "130px 1fr", alignItems: "center", gap: "8px" }}>
+                  <span style={{ fontWeight: 600 }}>
+                    {slotLabel(n)} <code style={{ color: "var(--muted)" }}>{`{{${n}}}`}</code>
+                  </span>
+                  <input
+                    className="input"
+                    style={{ height: "30px", fontSize: "12.5px" }}
+                    value={templateVars[n] ?? ""}
+                    placeholder={n === "2" ? "e.g. ₹100 OFF on Home Cleaning this Diwali" : n === "3" ? "https://..." : ""}
+                    onChange={(e) => setTemplateVars({ ...templateVars, [n]: e.target.value.replace(/[\r\n\t]+/g, " ") })}
+                  />
+                </label>
+              ))}
+            </div>
+          )}
+
+          {/* Custom Template Toolbar: Dynamic Variables & Preset Actions */}
+          {isCustomTemplate && (
+            <div
+              style={{
+                padding: "8px 10px",
+                background: "rgba(2, 132, 199, 0.05)",
+                border: "1px solid rgba(2, 132, 199, 0.25)",
+                borderRadius: "8px",
+                display: "flex",
+                flexDirection: "column",
+                gap: "6px",
+                fontSize: "12px",
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "6px" }}>
+                <span style={{ fontSize: "11px", fontWeight: 700, color: "#0369a1", display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                  <Sparkles size={13} />
+                  <span>Insert Variable Tag:</span>
+                </span>
+                <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => {
+                      setNewTemplateBody(toMetaTemplateBody(messageText, globalVariables));
+                      setNewTemplateOpen(true);
+                    }}
+                    disabled={!messageText.trim()}
+                    style={{ fontSize: "11px", height: "26px", padding: "0 10px", background: "#16a34a", color: "#fff", fontWeight: 700, border: "none", display: "inline-flex", alignItems: "center", gap: "4px" }}
+                    title="Submit this message to Meta as a template so it can be delivered to any number"
+                  >
+                    <Send size={12} />
+                    <span>Submit to Meta</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-ghost"
+                    onClick={handleSaveCustomTemplate}
+                    style={{ fontSize: "11px", height: "24px", padding: "0 8px", color: "#0284c7", fontWeight: 600, display: "inline-flex", alignItems: "center", gap: "4px" }}
+                    title="Save current message as a custom template preset"
+                  >
+                    <BookmarkPlus size={12} />
+                    <span>Save As Preset</span>
+                  </button>
+                  {selectedTemplateId?.startsWith("custom_") && selectedTemplateId !== "custom_new" && (
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-ghost"
+                      onClick={() => handleDeleteCustomTemplate(selectedTemplateId)}
+                      style={{ fontSize: "11px", height: "24px", padding: "0 6px", color: "#dc2626" }}
+                      title="Delete this custom template preset"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Tag Badges */}
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "4px" }}>
+                {["{name}", "{phone}", "{company}", "{link}", "{discount}", "{task}", "{message}"].map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => handleInsertTag(tag)}
+                    style={{
+                      background: "#ffffff",
+                      border: "1px solid rgba(2, 132, 199, 0.35)",
+                      borderRadius: "4px",
+                      padding: "2px 7px",
+                      fontSize: "11px",
+                      fontWeight: 600,
+                      color: "#0284c7",
+                      cursor: "pointer",
+                      fontFamily: "monospace",
+                    }}
+                    title={`Click to insert ${tag} into message`}
+                  >
+                    + {tag}
+                  </button>
+                ))}
+              </div>
+
+              <div style={{ fontSize: "10.5px", color: "#64748b", marginTop: "2px" }}>
+                💡 <strong>Tip:</strong> Custom messages only reach contacts active within 24 hours. To reach any number, click <strong>Submit to Meta</strong>; once approved it appears under Meta Approved Templates. <strong>Save As Preset</strong> only saves it in this browser.
+              </div>
+            </div>
+          )}
+
+          {/* Campaign Poster / Header Image Upload */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "10px",
+              padding: "8px 12px",
+              background: "var(--raised, #f8fafc)",
+              borderRadius: "8px",
+              border: "1px dashed rgba(37, 211, 102, 0.4)",
+              fontSize: "12px",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0, flex: 1 }}>
+              <ImageIcon size={16} style={{ color: "#25D366", flexShrink: 0 }} />
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontWeight: 600, color: "var(--text)", display: "flex", alignItems: "center", gap: "6px" }}>
+                  <span>Campaign Poster / Banner Image</span>
+                  {bannerImageUrl && (
+                    <span style={{ fontSize: "10px", color: "#16a34a", background: "rgba(22, 163, 74, 0.15)", padding: "1px 6px", borderRadius: "4px" }}>
+                      ✓ Attached
+                    </span>
+                  )}
+                </div>
+                <div style={{ fontSize: "11px", color: "var(--muted)", textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap" }}>
+                  {bannerFileName ? bannerFileName : "Upload a photo or flyer to include in WhatsApp message header"}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              <input
+                ref={bannerFileInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                onChange={handleBannerUpload}
+                style={{ display: "none" }}
+              />
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost"
+                onClick={() => bannerFileInputRef.current?.click()}
+                disabled={isUploadingBanner}
+                style={{
+                  fontSize: "11.5px",
+                  height: "28px",
+                  padding: "0 10px",
+                  borderColor: "#25D366",
+                  color: "#16a34a",
+                  fontWeight: 600,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "4px",
+                }}
+              >
+                <Upload size={12} />
+                <span>{isUploadingBanner ? "Uploading..." : bannerImageUrl ? "Change Image" : "Upload Image"}</span>
+              </button>
+
+              {bannerImageUrl && (
+                <button
+                  type="button"
+                  className="btn btn-sm btn-ghost"
+                  onClick={handleClearBanner}
+                  style={{
+                    fontSize: "11.5px",
+                    height: "28px",
+                    padding: "0 8px",
+                    color: "#dc2626",
+                  }}
+                  title="Remove banner image"
+                >
+                  <Trash2 size={12} />
+                </button>
+              )}
+            </div>
+          </div>
+
           {/* Authentic WhatsApp Phone Screen Preview & Editor Container */}
           <div
             style={{
@@ -668,21 +1204,18 @@ export function WhatsAppBulkMessaging({
               }}
             >
               <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                <div
+                <img
+                  src="/extrahand_app_icon_white_bg.png"
+                  alt={`${branding.company_name} logo`}
                   style={{
                     width: "32px",
                     height: "32px",
                     borderRadius: "50%",
-                    background: "#25D366",
-                    display: "grid",
-                    placeItems: "center",
-                    color: "#ffffff",
-                    fontWeight: 700,
-                    fontSize: "13px",
+                    background: "#ffffff",
+                    objectFit: "cover",
+                    flexShrink: 0,
                   }}
-                >
-                  EH
-                </div>
+                />
                 <div>
                   <div style={{ color: "#ffffff", fontWeight: 700, fontSize: "13px" }}>{branding.company_name} Official</div>
                   <div style={{ color: "#25D366", fontSize: "11px" }}>Verified Business Account · Meta API</div>
@@ -718,7 +1251,50 @@ export function WhatsAppBulkMessaging({
                 flex: 1,
               }}
             >
-              {bubbleMode === "edit" ? (
+              {/* WhatsApp Message Header Image / Banner Preview */}
+              {(bannerImageUrl || isMetaTemplate) && (
+                <div
+                  style={{
+                    marginBottom: "10px",
+                    borderRadius: "6px",
+                    overflow: "hidden",
+                    border: "1px solid rgba(255, 255, 255, 0.12)",
+                    background: "#0d281e",
+                    position: "relative",
+                  }}
+                >
+                  <img
+                    src={bannerImageUrl || "/extrahand_whatsapp_header.jpg"}
+                    alt="Template Header Banner"
+                    style={{
+                      width: "100%",
+                      maxHeight: "150px",
+                      objectFit: bannerImageUrl ? "cover" : "contain",
+                      background: "#ffffff",
+                      display: "block",
+                    }}
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).src = "/extrahand_whatsapp_header.jpg";
+                    }}
+                  />
+                  <div
+                    style={{
+                      position: "absolute",
+                      bottom: "4px",
+                      right: "6px",
+                      fontSize: "9px",
+                      background: "rgba(0,0,0,0.65)",
+                      color: "#fff",
+                      padding: "1px 5px",
+                      borderRadius: "3px",
+                    }}
+                  >
+                    {bannerImageUrl ? "Custom Uploaded Banner" : "ExtraHand Header (default)"}
+                  </div>
+                </div>
+              )}
+
+              {bubbleMode === "edit" && !isMetaTemplate ? (
                 <textarea
                   ref={textareaRef}
                   value={messageText}
@@ -742,6 +1318,36 @@ export function WhatsAppBulkMessaging({
               ) : (
                 <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", flex: 1, minHeight: "190px", lineHeight: "1.6" }}>
                   {previewText}
+                </div>
+              )}
+
+              {/* WhatsApp Template Button Preview (Meta approved templates only) */}
+              {isMetaTemplate && (
+                <div
+                  style={{
+                    marginTop: "10px",
+                    paddingTop: "8px",
+                    borderTop: "1px solid rgba(255, 255, 255, 0.12)",
+                    display: "flex",
+                    justifyContent: "center",
+                  }}
+                >
+                  <div
+                    style={{
+                      background: "rgba(37, 211, 102, 0.15)",
+                      color: "#25D366",
+                      fontSize: "12px",
+                      fontWeight: 600,
+                      padding: "6px 14px",
+                      borderRadius: "6px",
+                      border: "1px solid rgba(37, 211, 102, 0.3)",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "6px",
+                    }}
+                  >
+                    <span>🔗 View Task / Open ExtraHand</span>
+                  </div>
                 </div>
               )}
 

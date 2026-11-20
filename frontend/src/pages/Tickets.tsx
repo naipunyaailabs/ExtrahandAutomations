@@ -149,7 +149,7 @@ export default function Tickets() {
                       {t.assignee ? (
                         <>
                           <div>{t.assignee.name}</div>
-                          <div className="small muted">{t.assignment_local_only ? "accepted on call (local)" : t.assignee.phone}</div>
+                          <div className="small muted">{t.assigned_via === "whatsapp" ? "accepted on WhatsApp" : t.assignment_local_only ? "accepted on our call" : t.assignee.phone}</div>
                         </>
                       ) : t.active_call ? (
                         <div className="small calling-now"><span className="live-dot" /> Calling {t.active_call.helper_name}… ({t.last_run?.progress})</div>

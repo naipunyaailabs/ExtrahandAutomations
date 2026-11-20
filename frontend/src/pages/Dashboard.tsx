@@ -3,49 +3,50 @@ import {
   Activity,
   ArrowLeft,
   BarChart3,
-  ChevronRight,
   ClipboardList,
   ExternalLink,
   Inbox,
-  Layers,
-  PartyPopper,
   PhoneCall,
-  Radio,
-  Smartphone,
-  Sparkles,
   Star,
-  TrendingUp,
   Zap,
 } from "lucide-react";
-import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { CallingAgentView } from "../components/CallingAgentView";
 import { useConfig } from "../components/Layout";
-import { AnimatedNumber, itemVariants, Stagger } from "../components/motion";
+import { itemVariants, Stagger } from "../components/motion";
 import { Pipeline } from "../components/Pipeline";
 import { Timeline } from "../components/Timeline";
 import { Card, Empty, SkeletonRows, WhatsAppIcon } from "../components/ui";
 import { WhatsAppAgentView } from "../components/WhatsAppAgentView";
+import { type SpotlightModule } from "../components/ModuleSpotlight";
+import { ModuleGrid } from "../components/ModuleGrid";
+import { moduleByKey, type ModuleKey } from "../components/modules";
 import { AdvertisementView } from "../components/AdvertisementView";
 import { CustomerFeedbackPage } from "./CustomerFeedback";
 import { ReportsPage } from "./Reports";
 import { fmtMoney, fmtRelative, fmtTime } from "../format";
-import { usePoll } from "../hooks";
+import { usePoll, useUrlState } from "../hooks";
+import { useAuth } from "../context/AuthContext";
 
 type ActiveModule = "none" | "calling" | "whatsapp" | "advertisement" | "tickets" | "system" | "feedback" | "reports";
 
 export default function Dashboard() {
   const config = useConfig()!;
   const navigate = useNavigate();
-  const [activeModule, setActiveModule] = useState<ActiveModule>("none");
+  const { user } = useAuth();
+  // Kept in the URL (?module=calling): a reload stays on the open module, Back returns to the KPI cards
+  const [activeModule, setActiveModule, backToCards] = useUrlState<ActiveModule>("module", "none", { push: true });
 
   const stats = usePoll(api.stats, 3000);
   const calls = usePoll(() => api.calls(true), 2000);
   const tickets = usePoll(() => api.tickets(), 5000);
   const events = usePoll(() => api.events(25), 3000);
   const waStatus = usePoll(api.whatsapp.status, 6000);
+  const feedback = usePoll(api.whatsapp.feedbackOverview, 60000);
   const adCities = usePoll(api.advestiment.cities, 60000);
+  const pricing = usePoll(api.pricing.status, 15000);
+  const pricingStatus = pricing.data;
 
   const s = stats.data;
   const by = s?.tickets_by_status ?? {};
@@ -76,364 +77,124 @@ export default function Dashboard() {
     .sort((a, b) => a.next_followup!.due_at.localeCompare(b.next_followup!.due_at))
     .slice(0, 5);
 
+  // 7-day booking trend (real data: tasks per India day, oldest first)
+  const dayKey = (d: Date) => d.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+  const last7 = Array.from({ length: 7 }, (_, i) => dayKey(new Date(Date.now() - (6 - i) * 86400000)));
+  const perDay = (pick: (t: NonNullable<typeof tickets.data>[number]) => string | null | undefined) => {
+    const c: Record<string, number> = {};
+    for (const t of tickets.data ?? []) {
+      const v = pick(t);
+      if (v) { const k = dayKey(new Date(v)); c[k] = (c[k] ?? 0) + 1; }
+    }
+    return last7.map((k) => c[k] ?? 0);
+  };
+  const bookedTrend = perDay((t) => t.booked_at ?? t.created_at);
+  const assignedTrend = perDay((t) => (t.assigned_at ?? null));
+  const doneTrend = perDay((t) => (t.status === "completed" ? t.updated_at : null));
+  const pct = (a: number, b: number) => (b > 0 ? (a / b) * 100 : 0);
+  const esc = s?.open_escalations ?? 0;
+  const lowRatings = feedback.data?.counts.low ?? 0;
+
+  const base = (k: ModuleKey) => {
+    const m = moduleByKey(k);
+    return { key: m.key, title: m.title, subtitle: m.subtitle, icon: m.icon, accent: m.accent, onOpen: () => navigate(m.path) };
+  };
+  const spotlight: SpotlightModule[] = [
+    {
+      ...base("calling"),
+      status: config.telephony_provider === "twilio" ? "Twilio Voice" : config.telephony_provider === "vobiz" ? "Vobiz Voice" : "Simulator",
+      metrics: [
+        { label: "Active calls", value: s?.active_calls ?? 0, note: "Live dialing" },
+        { label: "Calls (24h)", value: s?.calls_24h ?? 0, note: "Placed to helpers" },
+        { label: "Escalations", value: esc, note: esc > 0 ? "Needs review" : "All clear", tone: esc > 0 ? "bad" : "good" },
+      ],
+      progress: s?.acceptance_rate_24h != null ? { label: "Acceptance rate (24h)", value: s.acceptance_rate_24h * 100 } : null,
+      peek: `${s?.active_calls ?? 0} Active · ${esc} Escalations`,
+      trend: assignedTrend, trendLabel: "Assigned · 7 days", action: "Launch Calling Console & Dial Engine",
+      attention: esc > 0,
+    },
+    {
+      ...base("whatsapp"),
+      status: waStatus.data?.status === "WORKING" ? "Online" : "Ready",
+      metrics: [
+        { label: "Dispatched tasks", value: assignedCount, note: "Work orders sent" },
+        { label: "Pending queue", value: unassignedCount, note: "Awaiting dispatch", tone: unassignedCount > 0 ? "warn" : undefined },
+        { label: "Messages today", value: waStatus.data?.messages_today ?? 0, note: waStatus.data?.status ?? "Status unknown" },
+      ],
+      progress: { label: "Queue throughput", value: pct(assignedCount, assignedCount + unassignedCount) },
+      peek: `${waStatus.data?.messages_today ?? 0} Today · ${unassignedCount} Pending`,
+      trend: bookedTrend, trendLabel: "Bookings · 7 days", action: "Open WhatsApp Agent & Templates",
+    },
+    {
+      ...base("advertisement"),
+      status: "Festival Calendar",
+      metrics: [
+        { label: "Monitored regions", value: `${adCityRegions.length} Cities`, note: `${adStates.map((c) => c.city_name).join(", ") || "No states"} + All-India` },
+        { label: "Festivals", value: `${adEvents.length} Events`, note: "Upcoming in calendar" },
+        { label: "Promo discounts", value: adMaxDiscount > 0 ? `Up to ${adMaxDiscount}%` : "—", note: "Dynamic coupons" },
+      ],
+      peek: `${adCityRegions.length} Cities · Up to ${adMaxDiscount}%`,
+      trend: bookedTrend, trendLabel: "Bookings · 7 days", action: "Register Festivals & Posters",
+    },
+    {
+      ...base("engagement"),
+      status: "Audit Ready",
+      metrics: [
+        { label: "Total volume", value: total, note: "Work orders logged" },
+        { label: "Acceptance rate", value: s?.acceptance_rate_24h != null ? `${Math.round(s.acceptance_rate_24h * 100)}%` : "—", note: "Helper cascade", tone: "good" },
+        { label: "Completion rate", value: total > 0 ? `${Math.round(pct(completedCount, total))}%` : "—", note: "Verified fulfilled" },
+      ],
+      progress: total > 0 ? { label: "Completed tasks", value: pct(completedCount, total) } : null,
+      peek: `${total} Tasks · ${completedCount} Completed`,
+      trend: doneTrend, trendLabel: "Completed · 7 days", action: "View Executive Reports & Exports",
+    },
+    {
+      ...base("pricing"),
+      status: pricingStatus?.running ? "Agent scanning…" : pricingStatus?.last_run?.finished_at ? `Scanned ${fmtRelative(pricingStatus.last_run.finished_at)}` : "Competitor Scan",
+      metrics: [
+        { label: "Priced", value: pricingStatus?.counts.priced ?? 0, note: "Service–area prices" },
+        { label: "Areas", value: pricingStatus?.counts.areas ?? 0, note: `${pricingStatus?.counts.services ?? 0} services` },
+        { label: "Competitors", value: pricingStatus?.counts.competitors ?? 0, note: "Tracked" },
+      ],
+      peek: `${pricingStatus?.counts.priced ?? 0} Priced · ${pricingStatus?.counts.competitors ?? 0} Rivals`,
+      trend: bookedTrend, trendLabel: "Bookings · 7 days", action: "View Prices & Competitive Analysis",
+    },
+    {
+      ...base("feedback"),
+      status: feedback.data?.active ? "Automation on" : "Automation off",
+      metrics: [
+        { label: "Avg rating", value: feedback.data?.averages.overall ? feedback.data.averages.overall.toFixed(1) : "—", note: "out of 5 stars" },
+        { label: "Responses", value: feedback.data?.counts.answered ?? 0, note: feedback.data ? `${feedback.data.response_rate}% replied` : "Customers" },
+        { label: "Low ratings", value: lowRatings, note: `${feedback.data?.counts.sent ?? 0} awaiting reply`, tone: lowRatings > 0 ? "bad" : "good" },
+      ],
+      progress: feedback.data ? { label: "Response rate", value: feedback.data.response_rate } : null,
+      peek: `${feedback.data?.counts.answered ?? 0} Replies · ${lowRatings} Low`,
+      trend: doneTrend, trendLabel: "Completed · 7 days", action: "Open Reviews & Feedback",
+      attention: lowRatings > 0,
+    },
+  ];
+
   return (
     <Stagger className="page">
       {/* =========================================================================
           INITIAL VIEW: ONLY SHOW THE KPI CARDS (BLUE & WHITE SHOWCASE WITH ANIMATION)
           ========================================================================= */}
       {activeModule === "none" ? (
-        <motion.div variants={itemVariants} className="kpi-initial-showcase" style={{ paddingTop: "0.5rem" }}>
-          <div className="kpi-initial-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))" }}>
-            {/* KPI CARD 1: Calling Agent (Royal Blue) */}
-            <motion.div
-              className="kpi-hero-card kpi-card-calling"
-              whileHover={{ y: -6, scale: 1.015 }}
-              whileTap={{ scale: 0.98 }}
-              transition={{ type: "spring", stiffness: 350, damping: 22 }}
-              onClick={() => navigate("/calling")}
-              role="button"
-              tabIndex={0}
-              aria-label="Open Calling Agent Dashboard"
-            >
-              <div>
-                <div className="kpi-hero-topbar">
-                  <div className="kpi-hero-icon icon-calling-wrap">
-                    <PhoneCall size={22} />
-                  </div>
-                  <span className="status-pill pill-blue">
-                    <Radio size={12} />
-                    <span>{config.telephony_provider === "twilio" ? "Twilio Voice" : "Simulator"}</span>
-                  </span>
-                </div>
-
-                <div className="kpi-hero-info">
-                  <h3 className="kpi-hero-title">Calling Agent</h3>
-                  <div className="kpi-hero-sub">📞 Helper Outreach &amp; Voice IVR</div>
-                </div>
-
-                <div className="kpi-hero-metrics">
-                  <div className="hero-metric-box">
-                    <span className="hero-metric-label">Active Calls</span>
-                    <span className="hero-metric-val val-calling">
-                      <AnimatedNumber value={s?.active_calls ?? 0} />
-                    </span>
-                    <span className="hero-metric-sub">Live dialing</span>
-                  </div>
-                  <div className="hero-metric-box">
-                    <span className="hero-metric-label">Calls (24h)</span>
-                    <span className="hero-metric-val val-calling">
-                      <AnimatedNumber value={s?.calls_24h ?? 0} />
-                    </span>
-                    <span className="hero-metric-sub">Completed</span>
-                  </div>
-                  <div className="hero-metric-box">
-                    <span className="hero-metric-label">Escalations</span>
-                    <span className="hero-metric-val" style={{ color: (s?.open_escalations ?? 0) > 0 ? "#dc2626" : "#10b981" }}>
-                      <AnimatedNumber value={s?.open_escalations ?? 0} />
-                    </span>
-                    <span className="hero-metric-sub">{(s?.open_escalations ?? 0) > 0 ? "Needs review" : "All clear"}</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="kpi-hero-action">
-                <span>Launch Calling Console &amp; Dial Engine</span>
-                <ChevronRight size={16} className="arrow-icon" />
-              </div>
-            </motion.div>
-
-            {/* KPI CARD 2: WhatsApp Automation (Vibrant Green with Green Borders) */}
-            <motion.div
-              className="kpi-hero-card kpi-card-whatsapp"
-              whileHover={{ y: -6, scale: 1.015 }}
-              whileTap={{ scale: 0.98 }}
-              transition={{ type: "spring", stiffness: 350, damping: 22 }}
-              onClick={() => navigate("/whatsapp")}
-              role="button"
-              tabIndex={0}
-              aria-label="Open WhatsApp Agent Dashboard"
-            >
-              <div>
-                <div className="kpi-hero-topbar">
-                  <div className="kpi-hero-icon icon-whatsapp-wrap">
-                    <WhatsAppIcon size={22} />
-                  </div>
-                  <span className={`status-pill ${waStatus.data?.status === "WORKING" ? "pill-green" : "pill-green"}`}>
-                    <Smartphone size={12} />
-                    <span>{waStatus.data?.status === "WORKING" ? "Online" : "Ready"}</span>
-                  </span>
-                </div>
-
-                <div className="kpi-hero-info">
-                  <h3 className="kpi-hero-title">WhatsApp Automation</h3>
-                  <div className="kpi-hero-sub">💬 Work Orders &amp; Direct Chat</div>
-                </div>
-
-                <div className="kpi-hero-metrics">
-                  <div className="hero-metric-box">
-                    <span className="hero-metric-label">Dispatched Tasks</span>
-                    <span className="hero-metric-val val-whatsapp">
-                      <AnimatedNumber value={assignedCount} />
-                    </span>
-                    <span className="hero-metric-sub">Work orders sent</span>
-                  </div>
-                  <div className="hero-metric-box">
-                    <span className="hero-metric-label">Pending Queue</span>
-                    <span className="hero-metric-val val-whatsapp">
-                      <AnimatedNumber value={unassignedCount} />
-                    </span>
-                    <span className="hero-metric-sub">Awaiting dispatch</span>
-                  </div>
-                  <div className="hero-metric-box">
-                    <span className="hero-metric-label">Messages Today</span>
-                    <span className="hero-metric-val val-whatsapp" style={{ color: "#16a34a" }}>
-                      <AnimatedNumber value={waStatus.data?.messages_today ?? 0} />
-                    </span>
-                    <span className="hero-metric-sub">{waStatus.data?.status ?? "Status unknown"}</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="kpi-hero-action">
-                <span>Open WhatsApp Agent &amp; Templates</span>
-                <ChevronRight size={16} className="arrow-icon" />
-              </div>
-            </motion.div>
-
-            {/* KPI CARD 3: Advertisement & Campaigns (Golden Yellow with Yellow Blast Icon & Borders) */}
-            <motion.div
-              className="kpi-hero-card kpi-card-advertisement"
-              whileHover={{ y: -6, scale: 1.015 }}
-              whileTap={{ scale: 0.98 }}
-              transition={{ type: "spring", stiffness: 350, damping: 22 }}
-              onClick={() => navigate("/advertisement")}
-              role="button"
-              tabIndex={0}
-              aria-label="Open Advertisement & City Event Campaigns"
-            >
-              <div>
-                <div className="kpi-hero-topbar">
-                  <div className="kpi-hero-icon icon-advertisement-wrap">
-                    <PartyPopper size={22} />
-                  </div>
-                  <span className="status-pill pill-yellow">
-                    <Sparkles size={12} />
-                    <span>Festival Calendar</span>
-                  </span>
-                </div>
-
-                <div className="kpi-hero-info">
-                  <h3 className="kpi-hero-title">Advertisement &amp; Campaigns</h3>
-                  <div className="kpi-hero-sub">🎉 State &amp; City Event Calendars &amp; Discounts</div>
-                </div>
-
-                <div className="kpi-hero-metrics">
-                  <div className="hero-metric-box">
-                    <span className="hero-metric-label">Monitored Regions</span>
-                    <span className="hero-metric-val val-advertisement">
-                      {adCityRegions.length} Cities
-                    </span>
-                    <span className="hero-metric-sub">
-                      {adStates.map((c) => c.city_name).join(", ") || "No states"} + All-India
-                    </span>
-                  </div>
-                  <div className="hero-metric-box">
-                    <span className="hero-metric-label">Registered Festivals</span>
-                    <span className="hero-metric-val val-advertisement">
-                      {adEvents.length} Events
-                    </span>
-                    <span className="hero-metric-sub">Upcoming in calendar</span>
-                  </div>
-                  <div className="hero-metric-box">
-                    <span className="hero-metric-label">Promo Discounts</span>
-                    <span className="hero-metric-val val-advertisement">
-                      {adMaxDiscount > 0 ? `Up to ${adMaxDiscount}%` : "—"}
-                    </span>
-                    <span className="hero-metric-sub">Dynamic coupons</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="kpi-hero-action">
-                <span>Register Festivals &amp; Posters</span>
-                <ChevronRight size={16} className="arrow-icon" />
-              </div>
-            </motion.div>
-
-            {/* KPI CARD 4: User Engagement & Operational Performance (Purple Theme) */}
-            <motion.div
-              className="kpi-hero-card kpi-card-reports"
-              whileHover={{ y: -6, scale: 1.015 }}
-              whileTap={{ scale: 0.98 }}
-              transition={{ type: "spring", stiffness: 350, damping: 22 }}
-              onClick={() => navigate("/engagement/dashboard")}
-              role="button"
-              tabIndex={0}
-              aria-label="Open User Engagement & Operational Performance Dashboard"
-            >
-              <div>
-                <div className="kpi-hero-topbar">
-                  <div className="kpi-hero-icon icon-reports-wrap">
-                    <BarChart3 size={22} />
-                  </div>
-                  <span className="status-pill pill-purple">
-                    <TrendingUp size={12} />
-                    <span>Audit Ready</span>
-                  </span>
-                </div>
-
-                <div className="kpi-hero-info">
-                  <h3 className="kpi-hero-title">User Engagement</h3>
-                  <div className="kpi-hero-sub">💎 Diamond · 🥇 Gold · 🥈 Silver Tiers</div>
-                </div>
-
-                <div className="kpi-hero-metrics">
-                  <div className="hero-metric-box">
-                    <span className="hero-metric-label">Total Volume</span>
-                    <span className="hero-metric-val val-reports">
-                      <AnimatedNumber value={total} />
-                    </span>
-                    <span className="hero-metric-sub">Work orders logged</span>
-                  </div>
-                  <div className="hero-metric-box">
-                    <span className="hero-metric-label">Acceptance Rate</span>
-                    <span className="hero-metric-val val-reports" style={{ color: "#10b981" }}>
-                      {s?.acceptance_rate_24h != null ? `${Math.round(s.acceptance_rate_24h * 100)}%` : "—"}
-                    </span>
-                    <span className="hero-metric-sub">Helper cascade</span>
-                  </div>
-                  <div className="hero-metric-box">
-                    <span className="hero-metric-label">Completion Rate</span>
-                    <span className="hero-metric-val val-reports">
-                      {total > 0 ? `${Math.round((completedCount / total) * 100)}%` : "—"}
-                    </span>
-                    <span className="hero-metric-sub">Verified fulfilled</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="kpi-hero-action">
-                <span>View Executive Reports &amp; Exports</span>
-                <ChevronRight size={16} className="arrow-icon" />
-              </div>
-            </motion.div>
-
-            {/* KPI CARD 5: Work Orders & Pipeline (Cyan Theme) */}
-            <motion.div
-              className="kpi-hero-card kpi-card-tasks"
-              whileHover={{ y: -6, scale: 1.015 }}
-              whileTap={{ scale: 0.98 }}
-              transition={{ type: "spring", stiffness: 350, damping: 22 }}
-              onClick={() => navigate("/tickets")}
-              role="button"
-              tabIndex={0}
-              aria-label="Open Work Orders Dashboard"
-            >
-              <div>
-                <div className="kpi-hero-topbar">
-                  <div className="kpi-hero-icon icon-tasks-wrap">
-                    <ClipboardList size={22} />
-                  </div>
-                  <span className="status-pill pill-cyan">
-                    <Layers size={12} />
-                    <span>{total} Total</span>
-                  </span>
-                </div>
-
-                <div className="kpi-hero-info">
-                  <h3 className="kpi-hero-title">Work Orders &amp; Tasks</h3>
-                  <div className="kpi-hero-sub">📋 Field Pipeline &amp; Matching</div>
-                </div>
-
-                <div className="kpi-hero-metrics">
-                  <div className="hero-metric-box">
-                    <span className="hero-metric-label">New / Open</span>
-                    <span className="hero-metric-val val-tasks">
-                      <AnimatedNumber value={unassignedCount} />
-                    </span>
-                    <span className="hero-metric-sub">Unassigned</span>
-                  </div>
-                  <div className="hero-metric-box">
-                    <span className="hero-metric-label">Assigned</span>
-                    <span className="hero-metric-val val-tasks">
-                      <AnimatedNumber value={assignedCount} />
-                    </span>
-                    <span className="hero-metric-sub">Helper matched</span>
-                  </div>
-                  <div className="hero-metric-box">
-                    <span className="hero-metric-label">Completed</span>
-                    <span className="hero-metric-val" style={{ color: "#10b981" }}>
-                      <AnimatedNumber value={completedCount} />
-                    </span>
-                    <span className="hero-metric-sub">Fulfilled</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="kpi-hero-action">
-                <span>Open Work Orders Pipeline</span>
-                <ChevronRight size={16} className="arrow-icon" />
-              </div>
-            </motion.div>
-
-            {/* KPI CARD 6: System Engine & Telemetry (Rose Theme) */}
-            <motion.div
-              className="kpi-hero-card kpi-card-system"
-              whileHover={{ y: -6, scale: 1.015 }}
-              whileTap={{ scale: 0.98 }}
-              transition={{ type: "spring", stiffness: 350, damping: 22 }}
-              onClick={() => navigate("/settings")}
-              role="button"
-              tabIndex={0}
-              aria-label="Open System Activity Feed"
-            >
-              <div>
-                <div className="kpi-hero-topbar">
-                  <div className="kpi-hero-icon icon-system-wrap">
-                    <Zap size={22} />
-                  </div>
-                  <span className="status-pill pill-rose">
-                    <Activity size={12} />
-                    <span>{config.extrahand_mode === "live" ? "Live ExtraHand" : "Dual Ready"}</span>
-                  </span>
-                </div>
-
-                <div className="kpi-hero-info">
-                  <h3 className="kpi-hero-title">System Engine &amp; Stream</h3>
-                  <div className="kpi-hero-sub">⚡ Dual Sync &amp; Event Stream</div>
-                </div>
-
-                <div className="kpi-hero-metrics">
-                  <div className="hero-metric-box">
-                    <span className="hero-metric-label">Reminders</span>
-                    <span className="hero-metric-val val-system">
-                      <AnimatedNumber value={reminders.length} />
-                    </span>
-                    <span className="hero-metric-sub">Countdown queue</span>
-                  </div>
-                  <div className="hero-metric-box">
-                    <span className="hero-metric-label">Recent Events</span>
-                    <span className="hero-metric-val val-system">
-                      <AnimatedNumber value={events.data?.length ?? 0} />
-                    </span>
-                    <span className="hero-metric-sub">Logged actions</span>
-                  </div>
-                  <div className="hero-metric-box">
-                    <span className="hero-metric-label">Sync Health</span>
-                    <span className="hero-metric-val val-system" style={{ fontSize: "1.2rem", color: "#10b981" }}>
-                      Optimal
-                    </span>
-                    <span className="hero-metric-sub">{config.extrahand_mode === "live" ? "Live data" : "Mock data"}</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="kpi-hero-action">
-                <span>Open System Stream &amp; Events</span>
-                <ChevronRight size={16} className="arrow-icon" />
-              </div>
-            </motion.div>
-          </div>
+        <motion.div variants={itemVariants}>
+          <ModuleGrid
+            modules={spotlight}
+            intro={
+              <HomeIntro
+                name={user?.name}
+                chips={[
+                  { label: "Tasks today", value: (tickets.data ?? []).filter((t) => t.is_today).length, tone: "brand" },
+                  { label: "Waiting for a helper", value: unassignedCount, tone: unassignedCount > 0 ? "warn" : "good" },
+                  { label: "Live calls", value: s?.active_calls ?? 0, tone: (s?.active_calls ?? 0) > 0 ? "brand" : "muted" },
+                  { label: "Escalations", value: esc, tone: esc > 0 ? "bad" : "good", onClick: () => navigate("/calling/care") },
+                ]}
+              />
+            }
+          />
         </motion.div>
       ) : (
         /* =========================================================================
@@ -444,7 +205,7 @@ export default function Dashboard() {
           <div className="feature-control-bar">
             <button
               className="back-to-kpi-btn"
-              onClick={() => setActiveModule("none")}
+              onClick={backToCards}
               title="Return to initial KPI Cards view"
             >
               <ArrowLeft size={16} />
@@ -680,5 +441,32 @@ export default function Dashboard() {
         </motion.div>
       )}
     </Stagger>
+  );
+}
+
+/** Greeting + live counters above the module spotlight. */
+function HomeIntro({ name, chips }: {
+  name?: string | null;
+  chips: { label: string; value: number; tone: "brand" | "good" | "warn" | "bad" | "muted"; onClick?: () => void }[];
+}) {
+  const hour = Number(new Date().toLocaleString("en-US", { hour: "numeric", hour12: false, timeZone: "Asia/Kolkata" }));
+  const hello = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+  const today = new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", timeZone: "Asia/Kolkata" });
+  return (
+    <div className="ms-intro">
+      <div className="ms-intro-text">
+        <span className="ms-intro-date">{today}</span>
+        <h1>{hello}{name ? `, ${name.split(" ")[0]}` : ""}</h1>
+        <p>All your automations at a glance. Click a card to open it.</p>
+      </div>
+      <div className="ms-intro-chips">
+        {chips.map((c) => (
+          <button key={c.label} type="button" className={`ms-chip tone-${c.tone}`} onClick={c.onClick} disabled={!c.onClick}>
+            <b>{c.value}</b>
+            <span>{c.label}</span>
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }

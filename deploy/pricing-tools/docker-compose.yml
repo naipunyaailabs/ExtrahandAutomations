@@ -1,0 +1,26 @@
+# The two helpers of the pricing agent. Both listen on the VPS's own loopback only; the backend reaches them as
+# SEARXNG_URL=http://127.0.0.1:8888 and GMAPS_SCRAPER_URL=http://127.0.0.1:8080 (see ../backend.env.example).
+#
+#   cd /opt/extrahand/pricing-tools
+#   echo "SEARXNG_SECRET=$(python3 -c 'import secrets; print(secrets.token_hex(32))')" > .env && chmod 600 .env
+#   docker compose up -d && docker compose logs -f
+#
+# `latest` is only for the first run: once it works, pin both images to the tag that is running.
+services:
+  searxng:
+    image: searxng/searxng:latest
+    restart: unless-stopped
+    ports: ["127.0.0.1:8888:8080"]
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?set it in .env}
+    volumes: ["./searxng:/etc/searxng"]
+
+  gmaps-scraper:
+    image: gosom/google-maps-scraper:latest
+    restart: unless-stopped
+    command: ["-web", "-data-folder", "/gmapsdata"]
+    ports: ["127.0.0.1:8080:8080"]
+    volumes: ["gmapsdata:/gmapsdata"]
+
+volumes:
+  gmapsdata:

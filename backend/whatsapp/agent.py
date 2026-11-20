@@ -12,36 +12,28 @@ Workflow:
 """
 
 import asyncio
-import json
 import logging
 import math
 import threading
-from functools import lru_cache
-from pathlib import Path
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
+from app.integrations.mapping import ist_text
 from app.branding import company, task_link
 from app.config import get_settings
 from app.database import SessionLocal
 from app.models import DispatchStatus, Event, Helper, Ticket, utcnow
 from app.services.common import log_event, runtime_settings
-from app.services.dispatch import helper_matches_ticket_service, km_between
+from app.services.dispatch import helper_matches_ticket_service
+from app.services.places import location_match
 from whatsapp.models import WhatsAppDispatchPayload
 from whatsapp.meta_client import get_meta_whatsapp_client
+from whatsapp.metering import tagged
 
 logger = logging.getLogger("whatsapp.dispatch_agent")
 
-_AREAS_FILE = Path(__file__).resolve().parent / "data" / "city_areas.json"
-
-
-@lru_cache
-def city_area_groups() -> List[set]:
-    """Area-name groups from data/city_areas.json (edit that file to add cities)."""
-    data = json.loads(_AREAS_FILE.read_text(encoding="utf-8"))
-    return [{a.lower() for a in names} for names in data.get("groups", {}).values()]
 
 
 
@@ -82,41 +74,14 @@ class WhatsAppTaskDispatchAgent:
             if not clean_phone or clean_phone in seen_phones:
                 continue
 
-            # 1. Location Matching:
-            # - Strict Haversine GPS distance if lat/lng available (must be <= effective_radius)
-            # - Fallback to city & neighborhood matching only if coordinates are missing
-            dist_km: Optional[float] = None
-            location_matched = False
-
-            has_coords = (
-                ticket.lat is not None and ticket.lng is not None and
-                h.lat is not None and h.lng is not None and
-                (ticket.lat != 0.0 or ticket.lng != 0.0) and
-                (h.lat != 0.0 or h.lng != 0.0)
+            # 1. Location: GPS distance, else places learned from ExtraHand data (PIN / city / areas / work areas)
+            location_matched, dist_km = location_match(
+                db, ticket, effective_radius, lat=h.lat, lng=h.lng, city=h.city, address=h.address,
+                pincode=h.pincode, work_areas=h.work_areas,
             )
-
-            if has_coords:
-                d = km_between(ticket.lat, ticket.lng, h.lat, h.lng)
-                if d is not None:
-                    if d <= effective_radius:
-                        dist_km = round(d, 1)
-                        location_matched = True
-                    else:
-                        # Outside the configured radius - exclude
-                        continue
-
-            t_loc = f"{ticket.city or ''} {ticket.address or ''}".lower().strip()
-            h_loc = f"{h.city or ''} {h.address or ''} {' '.join(h.work_areas or [])}".lower().strip()
-
-            if not location_matched and not has_coords:
-                # Matched by name only, so the distance is unknown (dist_km stays None)
-                if ticket.city and h.city and (ticket.city.strip().lower() in h.city.strip().lower() or h.city.strip().lower() in ticket.city.strip().lower()):
-                    location_matched = True
-                elif any(any(a in t_loc for a in group) and any(a in h_loc for a in group) for group in city_area_groups()):
-                    location_matched = True
-
             if not location_matched:
                 continue
+            dist_km = round(dist_km, 1) if dist_km is not None else None
 
             # 2. Service & Skill Matching: Check if helper skills match task category
             service_matched = helper_matches_ticket_service(ticket, h.skills, getattr(h, "categories", None))
@@ -149,7 +114,7 @@ class WhatsAppTaskDispatchAgent:
         scheduled_str = "Immediate / Flexible"
         if ticket.scheduled_at:
             try:
-                scheduled_str = ticket.scheduled_at.strftime("%d %b, %I:%M %p")
+                scheduled_str = ist_text(ticket.scheduled_at)
             except Exception:
                 scheduled_str = str(ticket.scheduled_at)
 
@@ -216,9 +181,27 @@ class WhatsAppTaskDispatchAgent:
             sem = asyncio.Semaphore(20)
 
             async def _send_to_partner(p: Dict[str, Any]) -> Dict[str, Any]:
+                from .service import send_task_alert
+
                 msg_body = self.compose_notification_message(ticket, p)
+                schedule = ist_text(ticket.scheduled_at)
+                payout = f"{self.settings.currency_symbol}{ticket.budget}" if ticket.budget else "To be confirmed"
                 async with sem:
-                    resp = await self.client.send_text_message(to=p["phone"], message=msg_body)
+                    with tagged("automation", "agent_broadcast", ticket.id):
+                        resp = await send_task_alert(
+                            self.client,
+                            phone=p["phone"],
+                            ticket_id=ticket.id,
+                            values=[
+                                (p.get("name") or "Partner").split(" ")[0] or "Partner",
+                                service_str,
+                                ticket.title or service_str,
+                                ticket.address or ticket.city or loc_str,
+                                schedule,
+                                payout,
+                            ],
+                            fallback_text=msg_body,
+                        )
                 return {
                     "helper_id": p["helper_id"],
                     "name": p["name"],
@@ -230,15 +213,18 @@ class WhatsAppTaskDispatchAgent:
                 }
 
             results = await asyncio.gather(*[_send_to_partner(p) for p in partners])
-            sent_count = sum(1 for r in results if r["status"] in ("sent", "simulated"))
-            failed_count = sum(1 for r in results if r["status"] not in ("sent", "simulated"))
+            # Real sends, test (simulated) sends and failures are counted separately: a simulated message never reached anyone
+            sent_count = sum(1 for r in results if r["status"] in ("sent", "delivered"))
+            simulated_count = sum(1 for r in results if r["status"] == "simulated")
+            failed_count = len(results) - sent_count - simulated_count
 
-            # Log audit event in database
+            # Log audit event in database (same "Status: …" format the dashboard counters read)
             log_event(
                 db,
                 ticket.id,
                 "whatsapp_agent_broadcast",
-                f"WhatsApp Dispatch Agent sent task alerts to {len(results)} partner(s) in {loc_str} matching '{service_str}'. ({sent_count} sent/simulated, {failed_count} failed)"
+                f"WhatsApp Dispatch Agent sent task alerts to {len(results)} partner(s) in {loc_str} matching '{service_str}'. "
+                f"Status: {sent_count} sent, {simulated_count} simulated, {failed_count} failed."
             )
             db.commit()
 
@@ -254,11 +240,13 @@ class WhatsAppTaskDispatchAgent:
                 "helpers_matched": len(partners),
                 "helpers_contacted": sent_count,
                 "sent_count": sent_count,
-                "simulated_count": 0,
+                "simulated_count": simulated_count,
                 "failed_count": failed_count,
                 "candidates": results,
                 "recipients": results,
-                "summary": f"Successfully notified {sent_count} partner(s) in {loc_str} via WhatsApp."
+                "summary": (f"WhatsApp sent to {sent_count} of {len(results)} partner(s) in {loc_str}"
+                            + (f"; {simulated_count} only simulated (not delivered)" if simulated_count else "")
+                            + (f"; {failed_count} failed" if failed_count else "") + "."),
             }
         finally:
             if close_db:
@@ -266,6 +254,13 @@ class WhatsAppTaskDispatchAgent:
 
     def dispatch_for_task(self, ticket_id: str, radius_km: Optional[float] = None) -> None:
         """Non-blocking background launcher called whenever a customer creates/uploads a task."""
+        from .service import claim_task_alert, whatsapp_automation_active
+
+        if not whatsapp_automation_active():
+            logger.info("WhatsApp Automation is DEACTIVE; not dispatching ticket %s", ticket_id)
+            return
+        if not claim_task_alert(ticket_id):
+            return  # already alerted by another path (or the task time has passed)
         def _run():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)

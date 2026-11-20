@@ -45,6 +45,21 @@ class SupportSummary(BaseModel):
     by_status: Dict[str, int] = Field(default_factory=dict)
 
 
+class HelperSummary(BaseModel):
+    """Helpers (ExtraHand partners): registrations from ExtraHand, activity from the Works they are assigned."""
+    total: Optional[int] = Field(default=None, description="Registered helpers (test accounts left out)")
+    new_today: Optional[int] = None
+    new_month: Optional[int] = None
+    verified: Optional[int] = None
+    aadhaar_verified: Optional[int] = None
+    with_completed_jobs: Optional[int] = None
+    blocked: Optional[int] = None
+    active_month: int = Field(default=0, description="Helpers assigned a Work booked or scheduled this month")
+    active_today: int = Field(default=0, description="Helpers assigned a Work booked or scheduled today")
+    today_assigned: int = Field(default=0, description="Today's Works that have a helper")
+    month_assigned: int = 0
+
+
 class EngagementDashboardSummary(BaseModel):
     """User Engagement dashboard for today (India time)."""
     today: str = Field(description="Today's date, YYYY-MM-DD (IST)")
@@ -72,6 +87,7 @@ class EngagementDashboardSummary(BaseModel):
     categories_breakdown: Dict[str, int] = Field(default_factory=dict)
     booking_sources: Dict[str, int] = Field(default_factory=dict)
     support: SupportSummary = Field(default_factory=SupportSummary)
+    helpers: HelperSummary = Field(default_factory=HelperSummary)
     excluded: Dict[str, Any] = Field(default_factory=dict, description="What was left out: team-posted and test data")
 
 

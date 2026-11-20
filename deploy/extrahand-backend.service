@@ -1,0 +1,31 @@
+# /etc/systemd/system/extrahand-backend.service
+#
+# ONE worker, on purpose: the dispatch lock, the calls in progress and the login lockout live in this process.
+# A second worker would split them and could place two calls to the same helper. Do not raise --workers.
+
+[Unit]
+Description=ExtraHand Intelligence backend (API and background worker)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=extrahand
+Group=extrahand
+WorkingDirectory=/opt/extrahand/backend
+EnvironmentFile=/etc/extrahand/backend.env
+ExecStart=/opt/extrahand/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1 --proxy-headers --forwarded-allow-ips 127.0.0.1
+Restart=always
+RestartSec=3
+TimeoutStopSec=30
+
+# The only place it may write is the audio folder (and the temporary directory it gets of its own).
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/extrahand
+StateDirectory=extrahand
+StateDirectoryMode=0750
+
+[Install]
+WantedBy=multi-user.target

@@ -1,7 +1,7 @@
 import { AnimatePresence, LayoutGroup, motion } from "framer-motion";
 import {
   ArrowLeft,
-  ClipboardList,
+  AudioLines,
   History,
   LayoutDashboard,
   LifeBuoy,
@@ -9,27 +9,45 @@ import {
   MessageSquare,
   PartyPopper,
   PhoneCall,
+  PhoneForwarded,
   Radio,
+  Scale,
+  IndianRupee,
+  FileText,
+  ClipboardList,
+  MessageSquareQuote,
+  ListChecks,
+  Braces,
   Send,
   Settings,
   Smartphone,
+  Inbox,
+  HandHeart,
+  UserRoundPlus,
   Star,
   Ticket,
   Users,
   Workflow,
+  Receipt,
+  ReceiptIndianRupee,
+  Megaphone,
+  Sprout,
+  CalendarDays,
+  SlidersHorizontal,
   type LucideIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { api } from "../api";
 import { fmtRelative } from "../format";
-import { usePoll } from "../hooks";
+import { useGoBack, usePoll } from "../hooks";
 import type { Stats } from "../types";
 import { EventToaster, ThemeButton, useConfig, UserChip } from "./Layout";
 import { LogoMark, Wordmark } from "./Logo";
 import { WhatsAppIcon } from "./ui";
+import { CallingAgentToggle } from "./CallingAgentToggle";
 
-export type AgentKind = "calling" | "whatsapp" | "advertisement" | "feedback" | "reports" | "tickets" | "settings";
+export type AgentKind = "calling" | "whatsapp" | "advertisement" | "feedback" | "reports" | "pricing" | "settings";
 
 interface NavItem {
   to: string;
@@ -53,11 +71,20 @@ const AGENTS: Record<AgentKind, { title: string; subtitle: string; icon: LucideI
     icon: PhoneCall,
     groups: [
       {
-        title: "Voice Console",
+        title: "Dispatch & Automation",
         items: [
           { to: "/calling", label: "Calling Agent Dispatch", icon: Workflow, match: ["/calling/dispatch"] },
           { to: "/calling/console", label: "Dialing Console", icon: Radio, badge: (s) => s.active_calls },
           { to: "/calling/history", label: "Call History", icon: History, match: ["/calls"] },
+          { to: "/calling/voice", label: "Voice & IVR", icon: AudioLines },
+          { to: "/calling/commercials/automation", label: "Automation Spend", icon: Receipt },
+        ],
+      },
+      {
+        title: "Bulk Calling",
+        items: [
+          { to: "/calling/bulk", label: "Bulk Calling", icon: PhoneForwarded },
+          { to: "/calling/commercials/bulk", label: "Bulk Spend", icon: Megaphone },
         ],
       },
       {
@@ -81,11 +108,15 @@ const AGENTS: Record<AgentKind, { title: string; subtitle: string; icon: LucideI
           { to: "/whatsapp", label: "WhatsApp Dispatch Dashboard", icon: Workflow, match: ["/whatsapp/dispatch"] },
           { to: "/whatsapp/overview", label: "Agent Overview", icon: LayoutDashboard, match: ["/whatsapp/dashboard"] },
           { to: "/whatsapp/send", label: "Send Work Order", icon: Send },
+          { to: "/whatsapp/commercials/automation", label: "Automation Commercials", icon: Receipt },
         ],
       },
       {
         title: "Connection",
-        items: [{ to: "/whatsapp/device", label: "Device & Pairing", icon: Smartphone }],
+        items: [
+          { to: "/whatsapp/device", label: "Meta Connection", icon: Smartphone },
+          { to: "/whatsapp/messages", label: "Sent Messages", icon: Inbox },
+        ],
       },
       {
         title: "Bulk Msgs",
@@ -96,8 +127,18 @@ const AGENTS: Record<AgentKind, { title: string; subtitle: string; icon: LucideI
             icon: MessageSquare,
             match: ["/whatsapp/bulk-msgs"],
           },
+          { to: "/whatsapp/commercials/bulk", label: "Bulk Commercials", icon: Megaphone },
         ],
       },
+      {
+        title: "Welcomers",
+        items: [
+          { to: "/whatsapp/welcomers/helper", label: "Helper Welcomer", icon: HandHeart },
+          { to: "/whatsapp/welcomers/customer", label: "Customer Welcomer", icon: UserRoundPlus },
+          { to: "/whatsapp/welcomers/commercials", label: "Welcomer Commercials", icon: Receipt },
+        ],
+      },
+
     ],
   },
   advertisement: {
@@ -109,6 +150,7 @@ const AGENTS: Record<AgentKind, { title: string; subtitle: string; icon: LucideI
         title: "Marketing Radar",
         items: [
           { to: "/advertisement", label: "Dashboard", icon: LayoutDashboard },
+          { to: "/advertisement/commercials", label: "Advertisement Commercials", icon: ReceiptIndianRupee },
         ],
       },
       {
@@ -117,25 +159,29 @@ const AGENTS: Record<AgentKind, { title: string; subtitle: string; icon: LucideI
           { to: "/advertisement/regions", label: "States & Cities", icon: MapPin, match: ["/advertisement/regions"] },
         ],
       },
+      {
+        title: "Task Seeding",
+        items: [
+          { to: "/advertisement/task-seeding", label: "Overview", icon: Sprout },
+          { to: "/advertisement/task-seeding/calendar", label: "Festival Calendar", icon: CalendarDays },
+          { to: "/advertisement/task-seeding/settings", label: "Settings", icon: SlidersHorizontal },
+          { to: "/advertisement/task-seeding/history", label: "Campaign History", icon: History },
+        ],
+      },
     ],
   },
   feedback: {
-    title: "Feedback & CSAT",
-    subtitle: "Post-service surveys & quality",
+    title: "Reviews & Feedback",
+    subtitle: "Customer ratings after every task",
     icon: Star,
     groups: [
       {
-        title: "CSAT Operations",
+        title: "Reviews & Feedback",
         items: [
-          { to: "/feedback", label: "CSAT Overview", icon: Star },
-          { to: "/customer-care", label: "Complaints & Escalations", icon: LifeBuoy, badge: (s) => s.open_escalations, danger: true },
-        ],
-      },
-      {
-        title: "Quality Verification",
-        items: [
-          { to: "/calling/history", label: "Post-Service Call Logs", icon: History },
-          { to: "/helpers", label: "Helper Performance", icon: Users },
+          { to: "/feedback/reviews", label: "Tasks & Feedback", icon: ClipboardList },
+          { to: "/feedback/replies", label: "Customer Replies", icon: MessageSquareQuote },
+          { to: "/feedback/template", label: "Feedback Template", icon: FileText },
+          { to: "/feedback/commercials", label: "Feedback Commercials", icon: Receipt },
         ],
       },
     ],
@@ -148,28 +194,31 @@ const AGENTS: Record<AgentKind, { title: string; subtitle: string; icon: LucideI
       {
         title: "Overview",
         items: [
-          { to: "/engagement/dashboard", label: "Dashboard", icon: LayoutDashboard, match: ["/engagement", "/reports"] },
+          { to: "/engagement/dashboard", label: "Dashboard", icon: LayoutDashboard, match: ["/engagement/dashboard", "/reports"] },
+          { to: "/engagement/regions", label: "Regions", icon: MapPin },
         ],
       },
     ],
   },
-  tickets: {
-    title: "Work Orders & Tasks",
-    subtitle: "Field pipeline & matching",
-    icon: ClipboardList,
+  pricing: {
+    title: "Competitive Pricing",
+    subtitle: "Pricing agent & competitors",
+    icon: IndianRupee,
     groups: [
       {
-        title: "Pipeline",
+        title: "Results",
         items: [
-          { to: "/tickets", label: "All Work Orders", icon: ClipboardList, match: ["/tickets/"] },
-          { to: "/helpers", label: "Eligible Helpers", icon: Users },
+          { to: "/pricing", label: "Recommended Prices", icon: IndianRupee },
+          { to: "/pricing/compare", label: "Our Prices vs Competitors", icon: Scale },
+          { to: "/pricing/analysis", label: "Competitive Analysis", icon: FileText },
+          { to: "/pricing/runs", label: "Agent Runs", icon: History },
         ],
       },
       {
-        title: "Support",
+        title: "Setup",
         items: [
-          { to: "/customer-care", label: "Escalations Queue", icon: LifeBuoy, badge: (s) => s.open_escalations, danger: true },
-          { to: "/calling", label: "Voice Dialing Console", icon: Radio },
+          { to: "/pricing/setup", label: "Areas, Services & Competitors", icon: ListChecks },
+          { to: "/pricing/api", label: "App API", icon: Braces },
         ],
       },
     ],
@@ -204,7 +253,7 @@ const ROUTES: Record<AgentKind, string[]> = {
   advertisement: ["/advertisement", "/advestiment"],
   feedback: ["/feedback"],
   reports: ["/reports", "/engagement"],
-  tickets: [],
+  pricing: ["/pricing"],
   settings: ["/settings"],
 };
 
@@ -222,6 +271,7 @@ export function AgentWorkspace({ agent, children }: { agent: AgentKind; children
   const location = useLocation();
   const { pathname, hash, search } = location;
   const { data: stats } = usePoll<Stats>(api.stats, 5000);
+  const goBack = useGoBack("/home");
 
 
   const resolvedGroups = def.groups;
@@ -235,14 +285,19 @@ export function AgentWorkspace({ agent, children }: { agent: AgentKind; children
       const [path, targetHash] = n.to.split("#");
       return pathname === path && hash === `#${targetHash}`;
     }
-    return (pathname === n.to && !hash && (!search || search === "")) || (n.match ?? []).some((m) => pathname.startsWith(m));
+    // Page filters live in ?query (e.g. /calling/tasks?date=today), so the query does not change which item is active
+    if (pathname === n.to && !hash) return true;
+    return (n.match ?? []).some((m) => pathname === m || pathname.startsWith(`${m.replace(/\/+$/, "")}/`));
   };
   const current = items.find(isActive) ?? items[0];
   const engine =
     agent === "calling"
-      ? config?.telephony_provider === "twilio" ? "Twilio Voice" : "Call simulator"
+      ? config?.telephony_provider === "vobiz" ? "Vobiz calls live"
+        : config?.telephony_provider === "twilio" ? "Twilio calls live" : "Call simulator"
       : agent === "whatsapp"
-      ? config?.whatsapp_simulated ? "Simulated line" : "OpenWA live"
+      ? config?.whatsapp_simulated ? "WhatsApp test mode" : "Meta WhatsApp"
+      : agent === "pricing"
+      ? "Weekly competitor scan"
       : config?.extrahand_mode === "live" ? "ExtraHand live" : "Dual ready";
 
   const link = (n: NavItem, variant: "side" | "mobile") => {
@@ -291,7 +346,7 @@ export function AgentWorkspace({ agent, children }: { agent: AgentKind; children
               transition={{ type: "spring", stiffness: 500, damping: 40 }} />
           )}
           <n.icon size={15} className="ws-nav-icon" style={{ flexShrink: 0, color: active ? "#2563eb" : "#64748b" }} />
-          <span className="ws-nav-label" style={{ fontSize: "12.5px", fontWeight: active ? 600 : 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          <span className="ws-nav-label" style={{ fontSize: "12.5px", fontWeight: active ? 600 : 500 }}>
             {n.label}
           </span>
           <AnimatePresence>
@@ -310,7 +365,7 @@ export function AgentWorkspace({ agent, children }: { agent: AgentKind; children
   return (
     <div className={`ws ws-${agent}`}>
       <aside className="ws-side">
-        <Link to="/" className="ws-brand" title="Overview Hub">
+        <Link to="/home" className="ws-brand" title="Home">
           <LogoMark size={30} />
           <span className="ws-brand-name"><Wordmark /></span>
         </Link>
@@ -342,22 +397,28 @@ export function AgentWorkspace({ agent, children }: { agent: AgentKind; children
               {stats?.last_sync.at ? `Synced ${fmtRelative(stats.last_sync.at)}` : "Not synced yet"}
             </div>
           </div>
-          <Link to="/" className="ws-back">
+          <button type="button" className="ws-back" onClick={goBack} title="One step back">
             <ArrowLeft size={15} />
-            <span>Back to Overview Hub</span>
-          </Link>
+            <span>Back</span>
+          </button>
         </div>
       </aside>
 
       <div className="ws-main">
         <header className="ws-top">
-          <Link to="/" className="ws-top-brand" aria-label="Overview Hub"><LogoMark size={26} /></Link>
+          <Link to="/home" className="ws-top-brand" aria-label="Home"><LogoMark size={26} /></Link>
           <div className="ws-crumb">
             <span className="ws-crumb-agent">{def.title}</span>
             <span className="ws-crumb-sep">/</span>
             <span className="ws-crumb-page">{current.label}</span>
           </div>
-          <div className="topbar-actions">
+          <div className="topbar-actions" style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            {agent === "calling" && (
+              <>
+                <CallingAgentToggle channel="automation" variant="bar" />
+                <CallingAgentToggle channel="bulk" variant="bar" />
+              </>
+            )}
             <ThemeButton />
             <UserChip />
           </div>

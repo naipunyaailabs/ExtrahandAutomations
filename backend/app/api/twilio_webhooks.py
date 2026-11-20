@@ -21,13 +21,17 @@ def _xml(body: str) -> Response:
 
 
 def _url(path: str, attempt_id: int) -> str:
-    return f"{get_settings().public_base_url.rstrip('/')}/api/telephony/twilio/{path}?attempt_id={attempt_id}"
+    from ..config import public_base_url
+
+    return f"{public_base_url()}/api/telephony/twilio/{path}?attempt_id={attempt_id}"
 
 
 async def _verified(request: Request, db: Session) -> tuple[CallAttempt, dict]:
     form = {k: str(v) for k, v in (await request.form()).items()}
     # Twilio signs the exact URL it requested, which is our public URL
-    public = get_settings().public_base_url.rstrip("/") + request.url.path
+    from ..config import public_base_url
+
+    public = public_base_url() + request.url.path
     if request.url.query:
         public += "?" + request.url.query
     if not valid_signature(public, form, request.headers.get("X-Twilio-Signature")):

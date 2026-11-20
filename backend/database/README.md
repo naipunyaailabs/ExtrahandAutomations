@@ -1,95 +1,43 @@
-# ExtraHand Database Automation & Schema
+# Database tables
 
-This directory contains the automated database initialization scripts and PostgreSQL schema definitions for the ExtraHand Intelligence platform.
+Every table is defined in Python and created by Python. There is no SQL file to run.
 
----
+| Where the tables are defined | Tables |
+|---|---|
+| `app/models.py` | core: tickets, helpers, customers, calls, follow-ups, WhatsApp, Task Seeding, settings, logs (21) |
+| `marketing/database.py` | Advertisement: cities, festivals, posters, festival runs, AI usage (5) |
+| `pricing/tables.py` | Pricing Agent (9) |
 
-## 🚀 How to Automatically Create Database & Tables
+**35 tables in total.**
 
-Whenever you run this script, it **automatically**:
-1. Connects to PostgreSQL using settings from `backend/.env` (or custom flags).
-2. Creates the target database (e.g. `INT`) if it does not already exist.
-3. Automatically creates all **9 required tables**, **indexes**, and **foreign keys** (`CREATE TABLE IF NOT EXISTS`).
-4. Verifies all tables and prints a status table showing columns, indexes, and row counts.
+## They are created automatically
 
----
+The backend calls `create_all_tables()` (`app/database.py`) every time it starts:
 
-### Option 1: Python Command (Recommended)
+- creates any table that is missing, with its indexes;
+- adds new columns to existing tables;
+- never drops or empties anything, so it is safe to run again and again.
 
-From `backend/` folder:
-```bash
-python init_db.py
+On the server (Docker) nothing needs to be run by hand: `docker compose up -d` starts the app and the tables are
+created on the first start.
+
+## Running it by hand (optional)
+
+From the `backend/` folder:
+
 ```
-Or from `backend/database/` folder:
-```bash
-python init_db.py
-```
-Or using the alias:
-```bash
-python create_tables.py
-```
-
----
-
-### Option 2: Windows 1-Click Batch File (`.bat`)
-
-Simply double-click:
-```
-backend\database\run_init_db.bat
-```
-or run from Command Prompt:
-```cmd
-cd backend\database
-run_init_db.bat
-```
-*(Automatically uses `backend/.venv` Python and keeps the terminal window open so you can view the results.)*
-
----
-
-### Option 3: PowerShell Script
-
-```powershell
-cd backend\database
-.\init_db.ps1
+python database/init_db.py            # create the database if missing, create every table, show a status table
+python database/init_db.py --sync     # ...and pull the live tickets and helpers from ExtraHand
+python database/init_db.py --reset    # DANGER: deletes ALL data, then creates every table empty
 ```
 
----
+In Docker: `docker compose exec app python database/init_db.py`
 
-## ⚙️ Advanced CLI Options
+It uses `DATABASE_URL` from `backend/.env` (or the environment), or `--host --port --user --password --dbname`.
 
-| Flag | Description | Example |
-| :--- | :--- | :--- |
-| *(none)* | Creates all tables if missing, verifies status | `python database/init_db.py` |
-| `--sync` | Automatically syncs live ExtraHand tickets and helpers after creating tables | `python database/init_db.py --sync` |
-| `--reset` | Drops existing public tables and recreates from scratch | `python database/init_db.py --reset` |
-| `--dbname` | Override database name | `python database/init_db.py --dbname INT` |
-| `--user` | Override database user | `python database/init_db.py --user postgres` |
-| `--password` | Override database password | `python database/init_db.py --password Manohar` |
-| `--host` | Override database host | `python database/init_db.py --host localhost` |
-| `--port` | Override database port | `python database/init_db.py --port 5432` |
+## Adding a table or a column
 
----
-
-## 📋 Created Tables (9 Total)
-
-| Table | Purpose |
-| :--- | :--- |
-| `app_settings` | Runtime dynamic settings (auto-dispatch toggle, IVR offsets) |
-| `customers` | Customer profiles retrieved from ExtraHand (`/users/{id}`) |
-| `helpers` | ExtraHand service partners & dispatch helpers with skills & coverage |
-| `tickets` | Bookings pulled from ExtraHand (`/tasks?postedBy=team`) |
-| `dispatch_runs` | Automated calling attempts for unassigned tickets |
-| `followups` | Scheduled reminder IVR calls before booking start times |
-| `call_attempts` | Full audit log of all automated phone calls |
-| `escalations` | Human customer care escalations for unassigned/rejected bookings |
-| `events` | Audit trail of all platform dispatch events |
-
----
-
-## 📁 Files in this Folder
-
-- **`schema.sql`**: Full raw PostgreSQL DDL script with table definitions, data types, indexes, and constraints.
-- **`init_db.py`**: Standalone Python script that automatically creates the database, executes `schema.sql`, and verifies tables.
-- **`create_tables.py`**: Shortcut script running `init_db.py`.
-- **`run_init_db.bat`**: 1-click Windows batch runner for double-clicking in File Explorer.
-- **`init_db.ps1`**: PowerShell runner script.
+1. Add it to the Python definition (`app/models.py`, `marketing/database.py` or `pricing/tables.py`).
+2. A new table is created on the next start by itself.
+3. A new column on an existing table also needs one line in the `_migrate_...` helpers in `app/database.py`
+   (or `_add_missing_columns` in `marketing/database.py`), because `create_all` does not change existing tables.

@@ -17,11 +17,10 @@ import re
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
-import httpx
-
 from app.branding import company
 from app.config import get_settings
 
+from .. import metering
 from ..database import db_update_event_fields
 
 logger = logging.getLogger("marketing.research_agent")
@@ -32,10 +31,10 @@ LIST_FIELDS = ("figures", "rituals", "symbols", "colors", "attire", "foods", "pl
                "imagery_do", "imagery_avoid")
 
 
-def _ask(prompt: str, temperature: float = 0.3) -> Dict[str, Any]:
+def _ask(prompt: str, temperature: float = 0.3, operation: str = "research") -> Dict[str, Any]:
     st = get_settings()
-    res = httpx.post(
-        st.openrouter_api_url,
+    res = metering.post(
+        operation, st.openrouter_api_url,
         headers={"Authorization": f"Bearer {st.openrouter_api_key}", "HTTP-Referer": st.website_url,
                  "X-Title": f"{company()} Festival Research Agent"},
         json={
@@ -89,7 +88,8 @@ def research_festival(event: Dict[str, Any], chat: Optional[Callable[[str], Dict
         "If you are not sure about something, leave it out rather than guess."
     )
     try:
-        data = (chat or _ask)(prompt)
+        with metering.job("research", str(event.get("id") or ""), title):
+            data = (chat or _ask)(prompt)
     except Exception as exc:  # noqa: BLE001
         logger.warning("[Agent 1] Research on %s failed: %s", title, exc)
         return old
@@ -173,7 +173,7 @@ def write_poster_brief(event: Dict[str, Any], knowledge: Dict[str, Any], offer: 
         "double quotes exactly as it must be written: the headline, the tagline, the cta, the discount, the coupon "
         "code, the date and the website."
     )
-    data = chat(prompt) if chat else _ask(prompt, temperature=0.95)  # creative: high temperature
+    data = chat(prompt) if chat else _ask(prompt, temperature=0.95, operation="brief")  # creative: high temperature
     brief = {k: re.sub(r"\s+", " ", str(data.get(k) or "")).strip()
              for k in ("concept", "headline", "tagline", "cta", "poster_prompt", "logo_position", "subject",
                        "setting", "composition", "palette", "typography", "text_layout")}

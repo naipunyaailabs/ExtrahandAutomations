@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import (
-    Column, Integer, MetaData, String, Table, Text, case, delete, func, insert, inspect, select, text, update,
+    Column, Float, Integer, MetaData, String, Table, Text, case, delete, func, insert, inspect, select, text, update,
 )
 
 from app.config import get_settings
@@ -105,6 +105,27 @@ ad_festival_runs = Table(
     Column("summary", Text, default=""),
     Column("model", String(120), default=""),
     Column("ran_at", String(32), nullable=False),
+)
+
+# One row per paid AI request of the Advertisement Agent (OpenRouter): festival scan, research, poster brief,
+# poster drawing and poster check. Feeds the Advertisement Commercials page.
+ad_ai_usage = Table(
+    "ad_ai_usage", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("job_id", String(40), index=True, default=""),  # one festival scan or one poster: its steps share it
+    Column("job_kind", String(20), default=""),  # scan | poster | research
+    Column("operation", String(20), nullable=False, index=True),  # scan | research | brief | draw | check
+    Column("model", String(120), default=""),
+    Column("event_id", String(160), default=""),
+    Column("title", Text, default=""),
+    Column("prompt_tokens", Integer, default=0),
+    Column("completion_tokens", Integer, default=0),
+    Column("images", Integer, default=0),
+    Column("cost_usd", Float, default=0.0),
+    Column("cost_source", String(12), default=""),  # openrouter (reported) | estimate (rate card) | none (failed)
+    Column("ok", Integer, default=1),
+    Column("latency_ms", Integer, default=0),
+    Column("created_at", String(32), nullable=False, index=True),  # UTC, ISO
 )
 
 _init_lock = threading.Lock()
@@ -482,11 +503,13 @@ def db_delete_event(event_id: str) -> None:
     with engine.begin() as conn:
         conn.execute(delete(ad_posters).where(ad_posters.c.event_id == event_id))
         conn.execute(delete(ad_events).where(ad_events.c.id == event_id))
-    for f in [*POSTERS_DIR.glob(f"{event_id}.*"), *(POSTERS_DIR / "art").glob(f"{event_id}-v*.*")]:
-        try:
-            f.unlink()
-        except OSError as exc:
-            logger.warning("[Advestiment DB] Could not delete poster file %s: %s", f, exc)
+    from app.services import media_store
+
+    try:
+        media_store.delete_prefix("posters", f"{event_id}.")
+        media_store.delete_prefix("posters/art", f"{event_id}-v")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[Advestiment DB] Could not delete the poster files of %s: %s", event_id, exc)
 
 
 # ---------------------------------------------------------------------------

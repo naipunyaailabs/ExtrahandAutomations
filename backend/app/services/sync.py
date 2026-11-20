@@ -220,10 +220,19 @@ def _sync_one(db: Session, src: ExtraHandSource, raw: dict, stats: dict) -> None
         else:
             t.ignored_remote_assignee_id = None
     if remote_assigned:
+        local_ids = {t.assignee_id, t.assignee_profile_id} - {None}
+        ours = t.assigned_via in ("call", "whatsapp") and bool(
+            local_ids & {rec["assignee_id"], rec.get("assignee_profile_id")})
         for k in ASSIGNEE_FIELDS:
             if rec[k] is not None or k == "assignee_id":
                 setattr(t, k, rec[k])
         t.assignment_local_only = False
+        if ours:
+            t.extrahand_push = "ok"  # ExtraHand now shows the helper we assigned
+            t.extrahand_push_error = None
+        elif t.assigned_via != "extrahand" or t.assignee_id != prev_assignee:
+            t.assigned_via, t.extrahand_push, t.extrahand_push_error = "extrahand", None, None
+            t.assigned_at = t.assigned_at if t.assignee_id == prev_assignee and t.assigned_at else utcnow()
         if not t.assignee_phone or not t.assignee_name:
             if h := _helper_contact(db, src, t.assignee_id):
                 t.assignee_phone = t.assignee_phone or h.phone
@@ -275,6 +284,7 @@ def _sync_one(db: Session, src: ExtraHandSource, raw: dict, stats: dict) -> None
     elif t.dispatch_status == DispatchStatus.ASSIGNED:
         for k in ASSIGNEE_FIELDS:
             setattr(t, k, None)
+        t.assigned_via = t.assigned_at = t.extrahand_push = t.extrahand_push_error = None
         cancel_for_ticket(db, t.id)
         t.dispatch_status = DispatchStatus.NEW
         log_event(db, t.id, "unassigned_remote", "Helper was unassigned on ExtraHand")

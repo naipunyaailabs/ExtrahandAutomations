@@ -1,0 +1,70 @@
+# =============================================================================
+# ExtraHand Intelligence Platform: Production Multi-Container Compose
+#
+# Backend  : port 5074 (https://backend.intelligence.extrahand.in)
+# Frontend : port 3074 (https://intelligence.extrahand.in)
+# Database : Remote PostgreSQL (200.141.7.100:5437/Extrahand) configured in backend/.env
+# Storage  : Azure Blob Storage (extrahandautomations) configured in backend/.env
+#
+# Quick commands:
+#   docker compose build
+#   docker compose up -d
+#   docker compose logs -f
+# =============================================================================
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: extrahand-backend:latest
+    container_name: extrahand-backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      PORT: "5074"
+      PUBLIC_BASE_URL: "https://backend.intelligence.extrahand.in"
+      TASK_SEEDING_LINK_BASE: "https://backend.intelligence.extrahand.in"
+      TRUST_PROXY_HEADERS: "true"
+    ports:
+      - "5074:5074"
+    volumes:
+      - voiceaudio:/audio
+      - appdata:/data
+    networks:
+      - extrahand-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_API_BASE_URL: "https://backend.intelligence.extrahand.in"
+    image: extrahand-frontend:latest
+    container_name: extrahand-frontend
+    restart: unless-stopped
+    ports:
+      - "3074:80"
+    depends_on:
+      - backend
+    networks:
+      - extrahand-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  extrahand-net:
+    driver: bridge
+
+volumes:
+  voiceaudio:
+  appdata:

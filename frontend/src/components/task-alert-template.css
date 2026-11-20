@@ -1,0 +1,95 @@
+/* Task alert template card (WhatsApp Dispatch dashboard). */
+
+.tat {
+  --tat-ok: #15803d; --tat-ok-bg: #dcfce7;
+  --tat-wait: #b45309; --tat-wait-bg: #fef3c7;
+  --tat-bad: #b91c1c; --tat-bad-bg: #fee2e2;
+  --tat-accent: #128c7e;
+  margin-top: 20px; padding: 20px; border-radius: 18px; border: 1px solid var(--border); background: var(--surface);
+  box-shadow: 0 2px 12px rgba(15, 23, 42, 0.04); display: grid; gap: 14px; min-width: 0;
+}
+:root[data-theme="dark"] .tat {
+  --tat-ok: #4ade80; --tat-ok-bg: rgba(34, 197, 94, 0.14);
+  --tat-wait: #fbbf24; --tat-wait-bg: rgba(245, 158, 11, 0.14);
+  --tat-bad: #f87171; --tat-bad-bg: rgba(239, 68, 68, 0.14);
+  --tat-accent: #25d366;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .tat {
+    --tat-ok: #4ade80; --tat-ok-bg: rgba(34, 197, 94, 0.14);
+    --tat-wait: #fbbf24; --tat-wait-bg: rgba(245, 158, 11, 0.14);
+    --tat-bad: #f87171; --tat-bad-bg: rgba(239, 68, 68, 0.14);
+    --tat-accent: #25d366;
+  }
+}
+
+.tat-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.tat-title { display: flex; gap: 12px; align-items: flex-start; min-width: 0; }
+.tat-icon { flex: none; width: 38px; height: 38px; border-radius: 11px; display: grid; place-items: center; color: #fff;
+  background: linear-gradient(135deg, #075e54 0%, #128c7e 100%); }
+.tat-title h3 { margin: 0; font-size: 16px; font-weight: 700; color: var(--text); letter-spacing: -0.01em; }
+.tat-title p { margin: 3px 0 0; font-size: 13px; color: var(--muted); }
+.tat-refresh { flex: none; width: 32px; height: 32px; border-radius: 999px; border: 1px solid var(--border); background: transparent;
+  color: var(--text-2); display: grid; place-items: center; cursor: pointer; }
+.tat-refresh:hover { background: var(--raised, rgba(148, 163, 184, 0.1)); }
+
+.tat-badges { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.tat-badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 650; }
+.tat-ok { color: var(--tat-ok); background: var(--tat-ok-bg); }
+.tat-wait { color: var(--tat-wait); background: var(--tat-wait-bg); }
+.tat-bad { color: var(--tat-bad); background: var(--tat-bad-bg); }
+.tat-cat { color: var(--text-2); background: var(--raised, rgba(148, 163, 184, 0.14)); }
+.tat-name { font-size: 12px; padding: 3px 8px; border-radius: 6px; background: var(--raised, rgba(148, 163, 184, 0.14)); color: var(--text-2); }
+
+.tat-note { font-size: 13px; line-height: 1.5; color: var(--text-2); padding: 10px 12px; border-radius: 10px;
+  background: var(--tat-wait-bg); border-left: 3px solid var(--tat-wait); }
+.tat-note-bad { background: var(--tat-bad-bg); border-left-color: var(--tat-bad); }
+
+.tat-grid { display: grid; grid-template-columns: minmax(280px, 420px) minmax(0, 1fr); gap: 20px; align-items: start; }
+@media (max-width: 900px) { .tat-grid { grid-template-columns: 1fr; } }
+
+/* preview */
+.tat-preview { display: grid; gap: 10px; min-width: 0; }
+.tat-seg { display: inline-flex; justify-self: start; padding: 3px; border-radius: 999px; background: var(--raised, rgba(148, 163, 184, 0.14)); }
+.tat-seg button { display: inline-flex; align-items: center; gap: 5px; border: 0; background: transparent; color: var(--text-2);
+  font: inherit; font-size: 12.5px; padding: 5px 12px; border-radius: 999px; cursor: pointer; }
+.tat-seg button.on { background: var(--surface); color: var(--text); font-weight: 650; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); }
+
+.tat-phone { border-radius: 18px; overflow: hidden; border: 1px solid #1f2c34; background: #0b141a; }
+.tat-phone-top { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: #1f2c34; color: #e9edef; }
+.tat-phone-top img { width: 32px; height: 32px; border-radius: 50%; background: #fff; }
+.tat-phone-top div { display: grid; }
+.tat-phone-top b { font-size: 14px; }
+.tat-phone-top small { font-size: 11px; color: #25d366; }
+.tat-chat { padding: 14px; min-height: 220px;
+  background: radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.04) 1px, transparent 0) 0 0 / 16px 16px, #0b141a; }
+.tat-bubble { position: relative; max-width: 94%; border-radius: 0 10px 10px 10px; background: #1f2c34; color: #e9edef; overflow: hidden; }
+.tat-bubble-text { padding: 10px 12px 4px; font-size: 13.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tat-footer { padding: 2px 12px 0; font-size: 12px; color: #8696a0; }
+.tat-time { padding: 2px 10px 6px; text-align: right; font-size: 11px; color: #8696a0; }
+.tat-button { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 10px; border-top: 1px solid #2a3942;
+  color: #53bdeb; font-size: 13.5px; font-weight: 600; text-decoration: none; }
+.tat-button:hover { background: rgba(83, 189, 235, 0.08); }
+.tat-caption { margin: 0; font-size: 12px; color: var(--muted); }
+
+/* side */
+.tat-side { display: grid; gap: 10px; min-width: 0; align-content: start; }
+.tat-side h4 { margin: 4px 0 0; font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.tat-vars { list-style: none; margin: 0; padding: 0; display: grid; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.tat-vars li { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 10px; align-items: center; padding: 9px 12px; border-top: 1px solid var(--border); }
+.tat-vars li:first-child { border-top: 0; }
+.tat-vars code { display: inline-flex; align-items: center; justify-content: center; height: 24px; border-radius: 6px; font-size: 12px; font-weight: 700;
+  color: var(--tat-accent); background: color-mix(in srgb, var(--tat-accent) 12%, transparent); }
+.tat-vars li div { display: grid; min-width: 0; }
+.tat-vars b { font-size: 13px; color: var(--text); font-weight: 600; }
+.tat-vars span { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.tat-today { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.tat-today div { display: grid; gap: 2px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); }
+.tat-today b { font-size: 22px; font-weight: 750; color: var(--text); letter-spacing: -0.02em; }
+.tat-today span { font-size: 12px; color: var(--muted); }
+.tat-today .tat-bad-n b { color: var(--tat-bad); }
+
+/* Compact: just the filled message for one task (WhatsApp > Send Work Order task view) */
+.tat-compact { padding: 0; border: 0; background: transparent; box-shadow: none; }
+.tat-compact .tat-grid { grid-template-columns: minmax(0, 1fr); }

@@ -8,5 +8,4 @@ export * from "./calling";
 export * from "./whatsapp";
 export * from "./marketing";
 export * from "./engagement";
-
-
+export * from "./pricing";

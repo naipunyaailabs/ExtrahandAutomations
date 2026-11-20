@@ -5,7 +5,21 @@ ticket workflows, customer care escalations, and post-service feedback.
 """
 
 from fastapi import APIRouter
-from app.api import calls, escalations, feedback, helpers, system, tickets, twilio_webhooks
+from app.api import (
+    bulk_calling,
+    calls,
+    commercials,
+    escalations,
+    feedback,
+    handoff,
+    helpers,
+    ivr_audio,
+    system,
+    tickets,
+    twilio_webhooks,
+    vobiz_webhooks,
+    voice,
+)
 
 # Master router for Service 1: Calling & Dispatch Operations
 calling_router = APIRouter(tags=["Calling Service"])
@@ -18,7 +32,13 @@ for module in (
     helpers,
     system,
     twilio_webhooks,
+    ivr_audio,
+    vobiz_webhooks,
+    handoff,
     feedback,
+    voice,
+    bulk_calling,
+    commercials,
 ):
     calling_router.include_router(module.router)
 

@@ -24,6 +24,7 @@ import httpx
 from app.branding import promo_message
 from app.config import get_settings
 
+from . import metering
 from .agent.research_agent import research_festival
 from .database import (
     db_get_event_by_id,
@@ -127,8 +128,8 @@ def _chat(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
     key = st.openrouter_api_key.strip()
     if not key:
         raise RuntimeError("Set OPENROUTER_API_KEY in backend/.env to use the festival finder.")
-    res = httpx.post(
-        st.openrouter_api_url,
+    res = metering.post(
+        "scan", st.openrouter_api_url,
         headers={"Authorization": f"Bearer {key}", "HTTP-Referer": st.website_url, "X-Title": "ExtraHand Festival Finder"},
         json={
             "model": st.festival_model,
@@ -303,9 +304,14 @@ def save_pending(festival: Dict[str, Any], imd_checked: bool) -> bool:
 
 def run_finder(chat=_chat) -> Dict[str, Any]:
     """Let the agent search the window and save the major festivals it finds for approval."""
-    st = get_settings()
     window = search_window()
     period = f"{window[0][0]}-{window[0][1]:02d} to {window[-1][0]}-{window[-1][1]:02d}"
+    with metering.job("scan", title=f"Festival scan {period}"):  # its requests are costed as one scan
+        return _run_finder(window, period, chat)
+
+
+def _run_finder(window, period: str, chat) -> Dict[str, Any]:
+    st = get_settings()
     found = saved = 0
     errors: List[str] = []
     opened: Dict[str, str] = {}  # pages the agent opened (the year page is shared by the months)

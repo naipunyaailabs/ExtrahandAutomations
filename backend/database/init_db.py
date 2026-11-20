@@ -3,7 +3,8 @@
 Automatically:
 1. Connects to PostgreSQL using settings from .env (or CLI arguments).
 2. Creates the target database (e.g. 'INT') if it doesn't already exist.
-3. Executes database/schema.sql to create all 9 tables, indexes, and constraints.
+3. Creates every table of the platform from the Python table definitions (app/models.py,
+   marketing/database.py, pricing/tables.py), with their indexes; new columns are added to existing tables.
 4. Verifies all tables, columns, indexes, and row counts.
 5. Optionally seeds/syncs live tickets and partners from ExtraHand (--sync).
 
@@ -159,35 +160,41 @@ def ensure_database_exists(cfg: dict) -> None:
         print(f"{DIM}    Attempting direct connection to '{target_db}'...{RESET}\n")
 
 
-def execute_schema_sql(cfg: dict, schema_path: Path, reset: bool = False) -> None:
-    """Executes schema.sql against target database."""
+def create_tables(cfg: dict, reset: bool = False) -> list[str]:
+    """Creates every table from the Python table definitions (the same code the backend runs at startup)."""
     import psycopg2
-
-    if not schema_path.is_file():
-        raise FileNotFoundError(f"Schema file not found at: {schema_path}")
-
-    sql_content = schema_path.read_text(encoding="utf-8")
-
-    conn = psycopg2.connect(**cfg)
-    conn.autocommit = True
-    cur = conn.cursor()
+    from urllib.parse import quote
 
     if reset:
+        conn = psycopg2.connect(**cfg)
+        conn.autocommit = True
+        cur = conn.cursor()
         print(f"{YELLOW}[!] Reset flag set: Dropping existing public schema tables...{RESET}")
         cur.execute("""
             DROP SCHEMA public CASCADE;
             CREATE SCHEMA public;
-            GRANT ALL ON SCHEMA public TO postgres;
             GRANT ALL ON SCHEMA public TO public;
         """)
+        cur.close()
+        conn.close()
         print(f"{GREEN}[OK] Public schema reset.{RESET}\n")
 
-    print(f"{CYAN}[*] Executing DDL schema: {schema_path.name}...{RESET}")
-    cur.execute(sql_content)
-    print(f"{GREEN}[OK] Schema DDL executed successfully!{RESET}\n")
+    # The backend reads DATABASE_URL: point it at the database chosen here (flags or .env)
+    os.environ["DATABASE_URL"] = (
+        f"postgresql+psycopg2://{quote(cfg['user'], safe='')}:{quote(cfg['password'] or '', safe='')}"
+        f"@{cfg['host']}:{cfg['port']}/{cfg['dbname']}"
+    )
+    backend_dir = Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(backend_dir))
+    from app.config import get_settings
 
-    cur.close()
-    conn.close()
+    get_settings.cache_clear()
+    from app.database import create_all_tables
+
+    print(f"{CYAN}[*] Creating tables from the Python table definitions...{RESET}")
+    tables = create_all_tables()
+    print(f"{GREEN}[OK] {len(tables)} tables ready.{RESET}\n")
+    return tables
 
 
 def verify_tables(cfg: dict) -> list[dict]:
@@ -338,7 +345,6 @@ def main():
     parser.add_argument("--user", help="PostgreSQL user (default: from .env or postgres)")
     parser.add_argument("--password", help="PostgreSQL password (default: from .env)")
     parser.add_argument("--dbname", help="PostgreSQL database name (default: from .env or INT)")
-    parser.add_argument("--schema-file", help="Path to custom schema.sql file")
     parser.add_argument("--reset", action="store_true", help="Drop existing tables before recreating")
     parser.add_argument("--sync", action="store_true", help="Sync live tickets and helpers immediately after creation")
 
@@ -349,18 +355,12 @@ def main():
     print(f"{BOLD}{CYAN}------------------------------------------------------------------------{RESET}\n")
 
     cfg = get_connection_config(args)
-    schema_path = (
-        Path(args.schema_file).resolve()
-        if args.schema_file
-        else Path(__file__).resolve().parent / "schema.sql"
-    )
 
     masked_pw = ("*" * len(cfg["password"])) if cfg["password"] else "(empty)"
     print(f"Target Database : {BOLD}{cfg['dbname']}{RESET}")
     print(f"Host / Port     : {cfg['host']}:{cfg['port']}")
     print(f"User            : {cfg['user']}")
-    print(f"Password        : {masked_pw}")
-    print(f"Schema File     : {schema_path}\n")
+    print(f"Password        : {masked_pw}\n")
 
     # Step 1: Ensure target database exists
     try:
@@ -368,11 +368,11 @@ def main():
     except Exception as e:
         print(f"{RED}Error checking database: {e}{RESET}")
 
-    # Step 2: Execute DDL
+    # Step 2: Create every table
     try:
-        execute_schema_sql(cfg, schema_path, reset=args.reset)
+        create_tables(cfg, reset=args.reset)
     except Exception as e:
-        print(f"{RED}Error executing schema.sql: {e}{RESET}")
+        print(f"{RED}Error creating tables: {e}{RESET}")
         sys.exit(1)
 
     # Step 3: Verify created tables
@@ -390,8 +390,7 @@ def main():
     print(f"{GREEN}{BOLD}[DONE] Database setup completed successfully!{RESET}\n")
     print(f"Next steps:")
     print(f"  1. Start backend server : {CYAN}python run.py{RESET}")
-    print(f"  2. Start frontend       : {CYAN}cd ../frontend && npm run dev{RESET}")
-    print(f"  3. Open dashboard       : {CYAN}http://localhost:5173/{RESET}\n")
+    print(f"  2. Open dashboard       : {CYAN}http://localhost:8050/{RESET} (after npm run build in frontend)\n")
 
 
 if __name__ == "__main__":

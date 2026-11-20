@@ -10,8 +10,9 @@ from ..integrations.extrahand import CandidatesUnavailable, ExtraHandError, get_
 from ..integrations.mapping import is_terminal, normalize_user
 from ..models import CallAttempt, DispatchRun, DispatchStatus, Escalation, Helper, Ticket, utcnow
 from ..telephony import TelephonyProvider, get_provider
-from .common import engine_lock, log_event, runtime_settings
+from .common import calling_hours_state, engine_lock, log_event, runtime_settings
 from .ivr import ACTIVE_STATUSES, dispatch_script
+from .places import location_match
 from .real_data import is_real_helper, is_real_user
 
 log = logging.getLogger(__name__)
@@ -142,18 +143,19 @@ def find_candidates(db: Session, ticket: Ticket) -> tuple[list[dict], str]:
             upsert_helper(db, rec)
             if not rec["phone"]:
                 continue
-            dist = rec["distance_km"]
-            if dist is None:
-                dist = km_between(ticket.lat, ticket.lng, rec["lat"], rec["lng"])
             # Strict matching on BOTH location AND requested service
             if not helper_matches_ticket_service(ticket, rec.get("skills"), rec.get("categories")):
                 continue
-            if dist is not None and dist > rt.match_radius_km:
-                continue
-            if dist is None and ticket.city and rec.get("city"):
-                t_c = ticket.city.strip().lower()
-                h_c = rec["city"].strip().lower()
-                if t_c not in h_c and h_c not in t_c:
+            dist = rec["distance_km"]  # from ExtraHand's matching API, when it gives one
+            if dist is not None:
+                if dist > rt.match_radius_km:
+                    continue
+            else:
+                ok, dist = location_match(
+                    db, ticket, rt.match_radius_km, lat=rec["lat"], lng=rec["lng"], city=rec.get("city"),
+                    address=rec.get("address"), pincode=rec.get("pincode"), work_areas=rec.get("work_areas"),
+                )
+                if not ok:
                     continue
             out.append({
                 "helper_id": rec["id"], "profile_id": rec["profile_id"], "name": rec["name"], "phone": rec["phone"],
@@ -166,26 +168,45 @@ def find_candidates(db: Session, ticket: Ticket) -> tuple[list[dict], str]:
             if str(h.id) in seen or not is_real_helper(h):
                 continue
             seen.add(str(h.id))
-            dist = None
-            if ticket.lat and ticket.lng and h.lat and h.lng:
-                dist = km_between(ticket.lat, ticket.lng, h.lat, h.lng)
             if not helper_matches_ticket_service(ticket, h.skills, h.categories):
                 continue
-            if dist is not None and dist > rt.match_radius_km:
+            ok, dist = location_match(
+                db, ticket, rt.match_radius_km, lat=h.lat, lng=h.lng, city=h.city, address=h.address,
+                pincode=h.pincode, work_areas=h.work_areas,
+            )
+            if not ok:
                 continue
-            if dist is None and ticket.city and h.city:
-                t_c = ticket.city.strip().lower()
-                h_c = h.city.strip().lower()
-                if t_c not in h_c and h_c not in t_c:
-                    continue
             out.append({
                 "helper_id": h.id, "profile_id": h.profile_id, "name": h.name, "phone": h.phone,
                 "skills": h.skills or [], "categories": h.categories or [], "city": h.city,
                 "distance_km": round(dist, 2) if dist is not None else None,
             })
 
+    out = [c for c in out if _can_take_task(db, ticket, c["helper_id"])]
     out.sort(key=lambda c: (c["distance_km"] is None, c["distance_km"] or 0))
     return out[: rt.max_helpers_per_ticket], source
+
+
+# Helpers in these ExtraHand states are never called (same rules as the Helper Details page)
+BLOCKED_HELPER_STATUSES = {
+    "rejected", "pending_review", "not_applied", "suspended", "blocked", "banned", "inactive", "deleted",
+}
+
+
+def _can_take_task(db: Session, ticket: Ticket, helper_id: str) -> bool:
+    """A helper is called only when allowed to work (not rejected / suspended / inactive) and free:
+    one helper, one task - anyone already assigned to another open task is skipped."""
+    h = db.get(Helper, helper_id)
+    if h is not None:
+        status = (h.status or "").strip().lower().replace(" ", "_")
+        if status in BLOCKED_HELPER_STATUSES or not h.is_active or not h.can_accept_tasks:
+            return False
+    other_tasks = (
+        db.query(Ticket)
+        .filter(Ticket.assignee_id == helper_id, Ticket.id != ticket.id, Ticket.dispatch_status != DispatchStatus.CLOSED)
+        .all()
+    )
+    return all(is_terminal(t.status) for t in other_tasks)
 
 
 def active_run(db: Session, ticket_id: str) -> DispatchRun | None:
@@ -197,6 +218,12 @@ def start_dispatch(db: Session, ticket_id: str, trigger: str = "manual") -> Disp
         ticket = db.get(Ticket, ticket_id)
         if not ticket:
             raise DispatchError("Ticket not found")
+        r = runtime_settings(db)
+        if r.emergency_stop_calls or not r.calling_agent_active:
+            raise DispatchError("Calling Agent is DEACTIVATED (Safety Mode). Click 'Activate' to allow phone calls.")
+        hours = calling_hours_state(db)
+        if not hours["open"]:
+            raise DispatchError(f"Outside calling hours ({hours['label']}). The agent calls helpers only in this window.")
         if run := active_run(db, ticket_id):
             return run
         if ticket.dispatch_status == DispatchStatus.CLOSED or is_terminal(ticket.status):
@@ -246,8 +273,18 @@ def _close_run(db: Session, run: DispatchRun, status: str, reason: str) -> None:
     run.finished_at = utcnow()
 
 
+WAITING_FOR_HOURS = "waiting_for_calling_hours"
+
+
 def _call_next(db: Session, run: DispatchRun) -> None:
     ticket = db.get(Ticket, run.ticket_id)
+    hours = calling_hours_state(db)
+    if not hours["open"]:
+        # Calling hours ended mid-dispatch: the next helper is called when the window opens again
+        run.reason = WAITING_FOR_HOURS
+        log_event(db, ticket.id, "dispatch_paused_hours",
+                  f"Calling hours are {hours['label']}; the next helper will be called when they open")
+        return
     provider, provider_error = get_provider_safe()
     while True:
         run.current_index += 1
@@ -281,6 +318,24 @@ def _call_next(db: Session, run: DispatchRun) -> None:
             log_event(db, ticket.id, "call_failed", f"Could not call {c['name']}: {e}")
 
 
+def resume_waiting_runs(db: Session) -> int:
+    """Continues dispatches that paused because calling hours ended. Returns how many resumed."""
+    if not calling_hours_state(db)["open"]:
+        return 0
+    r = runtime_settings(db)
+    if r.emergency_stop_calls or not r.calling_agent_active:
+        return 0
+    resumed = 0
+    with engine_lock:
+        for run in db.query(DispatchRun).filter_by(status="running", reason=WAITING_FOR_HOURS).all():
+            run.reason = None
+            log_event(db, run.ticket_id, "dispatch_resumed_hours", "Calling hours opened: calling the next helper")
+            _call_next(db, run)
+            resumed += 1
+        db.commit()
+    return resumed
+
+
 def get_provider_safe() -> tuple[TelephonyProvider | None, str | None]:
     try:
         return get_provider(), None
@@ -299,7 +354,6 @@ def on_call_finished(db: Session, attempt: CallAttempt) -> None:
 
 
 def _accept(db: Session, run: DispatchRun, attempt: CallAttempt) -> None:
-    s = get_settings()
     ticket = db.get(Ticket, run.ticket_id)
     cand = run.candidates[run.current_index]
     _close_run(db, run, "accepted", f"Accepted by {attempt.helper_name}")
@@ -310,19 +364,13 @@ def _accept(db: Session, run: DispatchRun, attempt: CallAttempt) -> None:
     ticket.dispatch_status = DispatchStatus.ASSIGNED
     log_event(db, ticket.id, "helper_accepted", f"{cand['name']} accepted the task")
 
-    src = get_source()
-    if s.extrahand_allow_assignment or src.mode == "mock":
-        try:
-            src.assign_helper(ticket.id, cand["helper_id"], cand.get("profile_id"), cand["name"])
-            ticket.assignment_local_only = False
-            log_event(db, ticket.id, "assigned_remote", f"Assigned {cand['name']} on ExtraHand")
-        except ExtraHandError as e:
-            ticket.assignment_local_only = True
-            log_event(db, ticket.id, "assign_failed", f"ExtraHand assignment failed, kept locally: {e}")
-    else:
-        ticket.assignment_local_only = True
-        log_event(db, ticket.id, "assigned_local",
-                  "Assignment recorded locally (EXTRAHAND_ALLOW_ASSIGNMENT is off)")
+    # Accepted on our call: assigned here at once, then written to ExtraHand in the background (see assignment.py).
+    # The sync keeps this local assignment until ExtraHand shows it (or ExtraHand itself assigns someone else).
+    from .assignment import mark_local_assignment, push_assignment_later
+
+    mark_local_assignment(ticket, "call")
+    log_event(db, ticket.id, "assigned_local", f"{cand['name']} accepted on our call and was assigned")
+    push_assignment_later(db, ticket.id)
 
     from .followups import schedule_for_ticket
 
@@ -349,12 +397,14 @@ def cancel_dispatch(db: Session, ticket_id: str, reason: str = "Cancelled by ope
         db.commit()
 
 
-def escalate(db: Session, ticket: Ticket, reason: str, details: str) -> Escalation:
-    """Hands the ticket to customer care / helper support."""
+def escalate(db: Session, ticket: Ticket, reason: str, details: str, keep_status: bool = False) -> Escalation:
+    """Hands the ticket to customer care / helper support. ``keep_status`` leaves the ticket's dispatch status alone
+    (an alert about an assigned helper, not a failed dispatch)."""
     existing = db.query(Escalation).filter(
         Escalation.ticket_id == ticket.id, Escalation.reason == reason, Escalation.status != "resolved"
     ).first()
-    ticket.dispatch_status = DispatchStatus.ESCALATED
+    if not keep_status:
+        ticket.dispatch_status = DispatchStatus.ESCALATED
     if existing:
         existing.details = details
         return existing

@@ -1,0 +1,5 @@
+[project]
+  subdomain = "extrahand-x225lfad"
+
+# The project named in CallingVoiceAgentUI/.env (the one its dashboard dispatches Maya to); the trunk and rule from
+# setup_livekit.py live in the same project. `lk agent create` adds the [agent] id when this agent is first deployed.

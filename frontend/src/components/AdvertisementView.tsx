@@ -23,6 +23,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api } from "../api";
+import { useGoBack, useUrlState } from "../hooks";
 import { useBranding } from "../branding";
 import { useToast } from "./ui";
 import { FestivalPosterCard, posterDesign } from "./FestivalPosterCard";
@@ -152,6 +153,7 @@ export function AdvertisementView({ mode = "dashboard" }: { mode?: "dashboard" |
   const branding = useBranding();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const goBackToRegions = useGoBack("/advertisement/regions");
   const { region: regionParam } = useParams<{ region?: string }>();
 
   // Older links (?region= / ?city=) open the region's calendar page
@@ -189,9 +191,16 @@ export function AdvertisementView({ mode = "dashboard" }: { mode?: "dashboard" |
 
   // ---- calendar --------------------------------------------------------------
   const todayIso = isoDate(new Date());
-  const [calYear, setCalYear] = useState(() => new Date().getFullYear());
-  const [calMonth, setCalMonth] = useState(() => new Date().getMonth());
-  const [selectedDateStr, setSelectedDateStr] = useState(todayIso);
+  // The selected day is kept in the URL (?date=2026-11-08): a reload reopens the same month and day
+  const [dateParam, setDateParam] = useUrlState<string>("date", todayIso);
+  const startDate = /^\d{4}-\d{2}-\d{2}$/.test(dateParam) ? dateParam : todayIso;
+  const [calYear, setCalYear] = useState(() => Number(startDate.slice(0, 4)));
+  const [calMonth, setCalMonth] = useState(() => Number(startDate.slice(5, 7)) - 1);
+  const [selectedDateStr, setSelectedDateStr] = useState(startDate);
+  useEffect(() => {
+    if (selectedCity && selectedDateStr !== dateParam) setDateParam(selectedDateStr);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDateStr, selectedCity]);
   const [events, setEvents] = useState<CityEvent[]>([]);
   const [loadingEvents, setLoadingEvents] = useState(false);
 
@@ -965,7 +974,7 @@ export function AdvertisementView({ mode = "dashboard" }: { mode?: "dashboard" |
         <div style={{ display: "flex", flexDirection: "column", gap: "12px", height: "calc(100vh - 118px)", minHeight: "560px", marginBottom: "-56px" }}>
           <div style={{ ...card, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px", padding: "8px 12px", flexShrink: 0 }}>
             <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0, flex: "1 1 320px" }}>
-              <button type="button" onClick={() => navigate("/advertisement/regions")} title="All States & Cities" aria-label="Back to all states and cities" style={{ ...btnLight, padding: "6px 8px" }}>
+              <button type="button" onClick={goBackToRegions} title="Back" aria-label="Back to all states and cities" style={{ ...btnLight, padding: "6px 8px" }}>
                 <ChevronLeft size={15} />
               </button>
               <div style={{ width: "32px", height: "32px", borderRadius: "9px", background: "#eff6ff", border: "1px solid #dbeafe", color: "#2563eb", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
