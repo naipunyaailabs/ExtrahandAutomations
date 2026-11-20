@@ -9,7 +9,8 @@ RUN npm ci --no-audit --no-fund
 
 COPY frontend/ ./
 
-ARG VITE_API_BASE_URL=https://backend.intelligence.extrahand.in
+# Empty = same address as the dashboard (/api is passed to the backend by nginx.conf)
+ARG VITE_API_BASE_URL=
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 
 RUN npm run build

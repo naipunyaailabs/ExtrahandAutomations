@@ -50,7 +50,9 @@ services:
       context: .
       dockerfile: frontend/Dockerfile
       args:
-        VITE_API_BASE_URL: "https://backend.intelligence.extrahand.in"
+        # empty = the dashboard calls /api on its own address, and its nginx passes it to the backend container
+        # (works on any domain, needs no CORS; the login cookie stays first-party)
+        VITE_API_BASE_URL: ""
     image: extrahand-frontend:latest
     container_name: extrahand-frontend
     restart: unless-stopped

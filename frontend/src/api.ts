@@ -62,7 +62,7 @@ export async function request<T>(
     });
   } catch {
     throw new Error(
-      `Cannot reach the server at ${url}. Check that the frontend (npm run dev) and backend (FastAPI port 8050) are running.`
+      `Cannot reach the server (${url}). Check your internet connection; if it keeps happening, the backend may be down.`
     );
   }
 
