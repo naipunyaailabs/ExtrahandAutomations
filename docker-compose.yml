@@ -20,8 +20,13 @@ services:
     image: extrahand-backend:latest
     container_name: extrahand-backend
     restart: unless-stopped
+    # Settings: on Dokploy, paste them into the app's Environment tab (Dokploy saves them as ./.env next to this
+    # file). Locally, backend/.env is used. Whichever exists is read; neither is in git.
     env_file:
-      - ./backend/.env
+      - path: ./.env
+        required: false
+      - path: ./backend/.env
+        required: false
     environment:
       PORT: "5074"
       PUBLIC_BASE_URL: "https://backend.intelligence.extrahand.in"
