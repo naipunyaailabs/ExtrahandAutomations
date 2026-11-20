@@ -56,17 +56,18 @@ def test_the_systemd_unit_runs_one_worker_without_reload():
     assert "EnvironmentFile=" in unit and "Restart=always" in unit
 
 
-def test_nginx_forwards_to_the_one_port_container():
-    conf = (DEPLOY / "nginx-dashboard.conf.example").read_text(encoding="utf-8")
-    assert "location /api/" in conf and "proxy_pass http://127.0.0.1:8050" in conf
-    assert re.search(r"location / \{\s*proxy_pass http://127\.0\.0\.1:8050", conf)  # the dashboard comes from the container
-    assert "127.0.0.1:8000" not in conf
-    assert "limit_req" in conf  # login and the public webhooks are rate limited
+def test_nginx_puts_https_in_front_of_both_containers():
+    conf = (DEPLOY / "nginx" / "extrahand-intelligence.conf").read_text(encoding="utf-8")
+    assert "server_name intelligence.extrahand.in;" in conf and "server_name backend.intelligence.extrahand.in;" in conf
+    assert "proxy_pass http://127.0.0.1:3074" in conf and "proxy_pass http://127.0.0.1:5074" in conf
+    assert re.search(r"location = /api/auth/login \{[^}]*limit_req zone=ex_login", conf)  # password guessing is slowed down
+    assert re.search(r"location ~ \^/api/\(telephony\|handoff\|whatsapp/webhook\) \{[^}]*limit_req zone=ex_hooks", conf)
     assert re.search(r"location ~ \^/\(docs\|redoc\|openapi", conf)  # no route listing, even if the app served one
     assert "return 301 https://" in conf
 
 
-@pytest.mark.parametrize("name", ["backend.env.example", "env.production.example", "extrahand-backend.service", "nginx-dashboard.conf.example", "README.md",
+@pytest.mark.parametrize("name", ["backend.env.example", "env.production.example", "extrahand-backend.service", "nginx-dashboard.conf.example",
+                                  "nginx/extrahand-intelligence.conf", "README.md",
                                   "pricing-tools/docker-compose.yml", "pricing-tools/searxng/settings.yml"])
 def test_no_real_secret_is_committed_in_deploy(name):
     text = (DEPLOY / name).read_text(encoding="utf-8")
@@ -75,8 +76,8 @@ def test_no_real_secret_is_committed_in_deploy(name):
 
 
 def test_the_pricing_api_is_rate_limited_in_nginx_and_its_tools_listen_on_loopback_only():
-    conf = (DEPLOY / "nginx-dashboard.conf.example").read_text(encoding="utf-8")
-    assert re.search(r"location /api/pricing/v1/ \{[^}]*limit_req zone=ex_pricing[^}]*proxy_pass http://127\.0\.0\.1:8050", conf)
+    conf = (DEPLOY / "nginx" / "extrahand-intelligence.conf").read_text(encoding="utf-8")
+    assert re.search(r"location /api/pricing/v1/ \{[^}]*limit_req zone=ex_pricing[^}]*proxy_pass http://127\.0\.0\.1:5074", conf)
     assert "zone=ex_pricing:" in conf
     compose = (DEPLOY / "pricing-tools" / "docker-compose.yml").read_text(encoding="utf-8")
     ports = re.findall(r'ports: \["([^"]+)"\]', compose)
@@ -96,25 +97,27 @@ def test_the_pricing_api_key_placeholder_is_refused_in_production(client, settin
 ROOT = DEPLOY.parent
 
 
-def test_docker_image_is_one_port_one_worker_and_keeps_secrets_out():
-    docker = (ROOT / "Dockerfile").read_text(encoding="utf-8")
-    assert "npm run build" in docker and "COPY --from=dashboard /web/dist /app/frontend/dist" in docker
-    assert '"--workers", "1"' in docker and '"--port", "8050"' in docker and "EXPOSE 8050" in docker
-    assert "USER extrahand" in docker and "APP_ENV=production" in docker and "/api/health" in docker
+def test_docker_images_run_one_backend_worker_and_keep_secrets_out():
+    backend = (ROOT / "backend" / "Dockerfile").read_text(encoding="utf-8")
+    assert '"--workers", "1"' in backend and '"--port", "5074"' in backend and "EXPOSE 5074" in backend
+    assert "USER extrahand" in backend and "APP_ENV=production" in backend and "/api/health" in backend
+    assert "IVR_AUDIO_DIR=/audio" in backend and "TZ=Asia/Kolkata" in backend
+    frontend = (ROOT / "frontend" / "Dockerfile").read_text(encoding="utf-8")
+    assert "npm run build" in frontend and "COPY --from=build /app/dist /usr/share/nginx/html" in frontend
+    site = (ROOT / "frontend" / "nginx.conf").read_text(encoding="utf-8")
+    assert "try_files $uri $uri/ /index.html" in site  # /login, /home and every page load the app
     ignore = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
     for must in ("**/.env", "backend/.venv", "frontend/node_modules", "backend/database/*.db"):
         assert must in ignore
 
 
-def test_compose_publishes_only_on_loopback_and_needs_a_db_password():
+def test_compose_publishes_only_on_loopback():
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
-    assert '"127.0.0.1:${APP_PORT:-8050}:8050"' in compose
-    assert compose.count("POSTGRES_PASSWORD:?") == 2  # will not start with an empty password
-    assert "env_file: .env" in compose and "appdata:/data" in compose and "pgdata:" in compose
-    db = compose.split("  db:")[1]
-    assert "ports:" not in db  # the database is never published
-    example = (DEPLOY / "env.production.example").read_text(encoding="utf-8")
-    assert "POSTGRES_PASSWORD=CHANGE_ME" in example and "SESSION_SECRET=CHANGE_ME" in example
+    # only nginx on the server reaches the containers; Docker would otherwise open them past the firewall
+    assert '"127.0.0.1:5074:5074"' in compose and '"127.0.0.1:3074:80"' in compose
+    assert "dockerfile: backend/Dockerfile" in compose and "dockerfile: frontend/Dockerfile" in compose
+    assert "voiceaudio:/audio" in compose and "appdata:/data" in compose
+    assert 'PUBLIC_BASE_URL: "https://backend.intelligence.extrahand.in"' in compose
 
 
 def test_every_table_is_created_by_python_on_an_empty_database(tmp_path, monkeypatch):
