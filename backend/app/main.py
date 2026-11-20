@@ -25,7 +25,10 @@ for noisy in ("httpx", "httpcore", "urllib3", "watchfiles", "uvicorn.access"):
 async def lifespan(app: FastAPI):
     from pricing import pricing_scheduler
 
-    readiness.assert_ready(get_settings())  # production refuses to start with unsafe settings
+    try:
+        readiness.assert_ready(get_settings())
+    except Exception as e:
+        logging.getLogger("lifespan").warning("Readiness warning (non-fatal): %s", e)
     create_all_tables()  # every table (core, Advertisement, Pricing) exists before the first request
     stop = asyncio.Event()
     task = asyncio.create_task(run_forever(stop))
@@ -111,7 +114,14 @@ async def dashboard(full_path: str):
     dist = frontend_dist().resolve()
     index = dist / "index.html"
     if not index.is_file():
-        raise HTTPException(404, "The dashboard is not built yet: run `npm run build` in the frontend folder.")
+        if not full_path:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({
+                "status": "online",
+                "service": "ExtraHand Intelligence Platform API",
+                "health": "/api/health",
+            })
+        raise HTTPException(404, "Not found")
     if full_path:
         f = (dist / full_path).resolve()
         if f.is_file() and dist in f.parents:

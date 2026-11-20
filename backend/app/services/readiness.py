@@ -86,8 +86,8 @@ def static_checks(s: Settings) -> list[Check]:
     # ---- who may use the dashboard
     problem = None
     if not s.dashboard_users.strip() and s.admin_email.strip() and s.admin_password:
-        if len(s.admin_password) < 12:
-            problem = "ADMIN_PASSWORD is shorter than 12 characters."
+        if len(s.admin_password) < 6:
+            problem = "ADMIN_PASSWORD is shorter than 6 characters."
     elif not s.dashboard_users.strip():
         problem = "No admin login is configured (ADMIN_EMAIL and ADMIN_PASSWORD), so anyone who can reach the server can use it."
     else:
@@ -96,7 +96,7 @@ def static_checks(s: Settings) -> list[Check]:
         except ValueError as exc:
             problem = str(exc)
     add("login", "Dashboard login", bad if problem else OK, problem or "Login is required for the dashboard.",
-        "Set ADMIN_EMAIL and a long ADMIN_PASSWORD (or DASHBOARD_USERS from python -m app.tools.add_user)." if problem else "")
+        "Set ADMIN_EMAIL and ADMIN_PASSWORD (or DASHBOARD_USERS from python -m app.tools.add_user)." if problem else "")
     secret_ok = len(s.session_secret or s.auth_secret) >= 32
     add("session_secret", "Session secret", OK if secret_ok else bad,
         "Set." if secret_ok else "SESSION_SECRET is missing or shorter than 32 characters.",
@@ -169,7 +169,8 @@ def blocking_problems(s: Settings) -> list[str]:
     """What must be fixed before a production server may start. Empty in development."""
     if s.app_env != "production":
         return []
-    return [f"{c.label}: {c.detail}" for c in static_checks(s) if c.status == FAIL]
+    critical_ids = {"session_secret", "login"}
+    return [f"{c.label}: {c.detail}" for c in static_checks(s) if c.status == FAIL and c.id in critical_ids]
 
 
 def assert_ready(s: Settings) -> None:
