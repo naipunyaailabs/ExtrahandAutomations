@@ -57,7 +57,7 @@ services:
     container_name: extrahand-frontend
     restart: unless-stopped
     ports:
-      - "127.0.0.1:3074:80"     # only nginx on this server reaches it
+      - "127.0.0.1:3074:3074"     # only nginx on this server reaches it
     depends_on:
       - backend
     networks:
