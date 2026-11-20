@@ -16,6 +16,7 @@ import {
   Star,
 } from "lucide-react";
 import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type PointerEvent } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { request } from "../api";
 import { ThemeButton } from "../components/Layout";
 import { EASE } from "../components/motion";
@@ -156,6 +157,9 @@ export default function LoginPage() {
   const focus = orbit.focus;
   const active = MODULES[focus];
 
+  const navigate = useNavigate();
+  const location = useLocation();
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(true);
@@ -180,7 +184,12 @@ export default function LoginPage() {
     setLoading(true);
     const error = await login(email, password, remember);
     setLoading(false);
-    if (error) setErrors({ form: error });
+    if (error) {
+      setErrors({ form: error });
+    } else {
+      const from = (location.state as { from?: string } | null)?.from;
+      navigate(from && from.startsWith("/") && !from.startsWith("/login") ? from : "/home", { replace: true });
+    }
   };
 
   const trackCaps = (e: KeyboardEvent<HTMLInputElement>) => setCapsLock(e.getModifierState?.("CapsLock") ?? false);

@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 _TMP = Path(tempfile.mkdtemp(prefix="backend_tests_"))
+os.environ["TESTING"] = "1"
 os.environ["DATABASE_URL"] = f"sqlite:///{(_TMP / 'test.db').as_posix()}"
 os.environ["EXTRAHAND_MODE"] = "mock"
 os.environ["MEDIA_STORAGE"] = "local"  # never the real Azure account
@@ -24,12 +25,11 @@ import pytest  # noqa: E402
 dotenv.load_dotenv = lambda *args, **kwargs: False  # marketing/agent.py would copy backend/.env into the environment
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app import models  # noqa: E402,F401  (registers the tables)
 from app.config import Settings, get_settings  # noqa: E402
-
 Settings.model_config["env_file"] = None  # a developer's backend/.env (live keys, hand-off address...) must not reach the tests
 get_settings.cache_clear()
 
+from app import models  # noqa: E402,F401  (registers the tables)
 from app.database import Base, SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
 from app.services import tts_audio  # noqa: E402
@@ -46,6 +46,7 @@ def _no_dns_preflight(request, monkeypatch):
 
     monkeypatch.setattr(config, "public_url_dns_problem", lambda url=None: None)
     monkeypatch.setattr(vobiz, "public_url_dns_problem", lambda url=None: None)
+    monkeypatch.setattr("app.services.readiness.public_url_dns_problem", lambda url=None: None, raising=False)
 
 
 @pytest.fixture(autouse=True)

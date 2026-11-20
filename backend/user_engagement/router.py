@@ -14,6 +14,9 @@ engagement_router = APIRouter(tags=["User Engagement & Analytics"])
 @engagement_router.on_event("startup")
 def _start_engagement_poller() -> None:
     """Keep the dashboard's ExtraHand data fresh (read every 5 minutes in the background)."""
+    import os
+    if os.getenv("TESTING") == "1" or os.getenv("PYTEST_CURRENT_TEST"):
+        return
     from .extrahand_data import start_poller
 
     start_poller()

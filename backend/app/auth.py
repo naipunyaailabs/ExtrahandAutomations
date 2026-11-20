@@ -22,12 +22,13 @@ from pydantic import BaseModel
 
 from .config import get_settings
 
-COOKIE = "ip_session"
+COOKIE = "extrahand_session"
 GATE_DETAIL = "Login required"
 
 # Reached by machines, not by people with a session. Each has its own protection.
 PUBLIC_PREFIXES = (
     "/api/auth/",  # login, logout, who am I
+    "/api/public-config",  # branding shown on the login screen before signing in
     "/api/health",
     "/api/telephony/vobiz/",  # signed by Vobiz and bound to a per-call token
     "/api/telephony/twilio/",  # signed by Twilio
@@ -185,14 +186,21 @@ def read_session(token: str | None) -> dict | None:
 
 def _cookie_of(headers) -> str | None:
     for name, value in headers:
-        if name == b"cookie":
+        if name.lower() == b"cookie":
+            val_str = value.decode("latin1", "replace")
+            for part in val_str.split(";"):
+                part = part.strip()
+                for cname in (COOKIE, "ip_session"):
+                    if part.startswith(cname + "="):
+                        return part[len(cname) + 1:].strip('"')
             try:
                 jar = SimpleCookie()
-                jar.load(value.decode("latin1"))
+                jar.load(val_str)
+                morsel = jar.get(COOKIE) or jar.get("ip_session")
+                if morsel:
+                    return morsel.value
             except CookieError:
-                return None
-            morsel = jar.get(COOKIE)
-            return morsel.value if morsel else None
+                pass
     return None
 
 
@@ -240,6 +248,21 @@ def client_address(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def extract_token(request: Request) -> str | None:
+    auth_header = (request.headers.get("authorization") or "").strip()
+    if auth_header.startswith("Bearer "):
+        bearer = auth_header[7:].strip()
+        if bearer:
+            return bearer
+    token = (request.headers.get("x-session-token") or "").strip()
+    if token:
+        return token
+    token = request.cookies.get(COOKIE) or request.cookies.get("ip_session")
+    if token:
+        return token
+    return _cookie_of(request.scope.get("headers", []))
+
+
 # ---- the gate ---------------------------------------------------------------------------------------------
 
 class AuthGate:
@@ -256,7 +279,9 @@ class AuthGate:
 
     async def __call__(self, scope, receive, send) -> None:
         if scope["type"] in ("http", "websocket") and auth_enabled() and self._needs_session(scope):
-            if read_session(_cookie_of(scope["headers"])) is None:
+            req = Request(scope)
+            token = extract_token(req)
+            if read_session(token) is None:
                 if scope["type"] == "websocket":
                     await send({"type": "websocket.close", "code": 1008})
                 else:
@@ -282,13 +307,34 @@ def _public(user: DashboardUser) -> dict:
     return {"email": user.email, "name": user.name, "role": user.role, "auth_enabled": True}
 
 
+def _cookie_options(request: Request) -> dict:
+    """How the session cookie is set for the address the browser is on.
+
+    - SESSION_COOKIE_DOMAIN (e.g. .extrahand.in) only when the site really is under it: a browser drops a cookie
+      for another domain, which would sign the user out at once on localhost or a server IP.
+    - Secure only over https (the scheme comes from X-Forwarded-Proto behind the proxy): a Secure cookie is dropped
+      on plain http, and SameSite=None needs Secure."""
+    s = get_settings()
+    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.hostname or "").split(":")[0].lower()
+    wanted = (s.session_cookie_domain or "").strip().lower()
+    base = wanted.lstrip(".")
+    domain = wanted if base and (host == base or host.endswith("." + base)) else None
+    proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "").lower()
+    https = proto == "https"
+    secure = bool(s.session_cookie_secure) and https
+    samesite = (s.session_cookie_samesite or "lax").strip().lower()
+    if samesite == "none" and not secure:
+        samesite = "lax"
+    return {"domain": domain, "secure": secure, "samesite": samesite}
+
+
 @router.post("/login")
 def login(body: LoginBody, request: Request, response: Response):
     if not auth_enabled():
         return DEV_USER
     email = body.email.strip().lower()
     keys = (f"ip:{client_address(request)}", f"email:{email}")
-    if THROTTLE.blocked(*keys):
+    if THROTTLE.blocked(*keys):  # checked first: guessing stays blocked even when a guess is right
         raise HTTPException(429, "Too many wrong attempts. Try again in a few minutes.")
     user = users().get(email)
     ok = check_password(user, body.password)
@@ -300,27 +346,27 @@ def login(body: LoginBody, request: Request, response: Response):
     except RuntimeError:
         raise HTTPException(503, "The server is not set up for login yet (SESSION_SECRET is missing).") from None
     THROTTLE.clear(*keys)
-    s = get_settings()
-    domain = (s.session_cookie_domain or "").strip() or None
-    samesite = (s.session_cookie_samesite or "lax").strip().lower()
-    response.set_cookie(COOKIE, token, max_age=ttl, httponly=True, secure=s.session_cookie_secure,
-                        samesite=samesite, domain=domain, path="/")
-    return _public(user)
+    response.set_cookie(COOKIE, token, max_age=ttl, httponly=True, path="/", **_cookie_options(request))
+    response.delete_cookie("ip_session", path="/")
+    out = _public(user)
+    out["token"] = token
+    return out
 
 
 @router.get("/me")
 def me(request: Request):
     if not auth_enabled():
         return DEV_USER
-    session = read_session(request.cookies.get(COOKIE))
+    token = extract_token(request)
+    session = read_session(token)
     if session is None:
         raise HTTPException(401, GATE_DETAIL)
-    return {"email": session["e"], "name": session["n"], "role": session["r"], "auth_enabled": True}
+    return {"email": session["e"], "name": session["n"], "role": session["r"], "auth_enabled": True, "token": token}
 
 
 @router.post("/logout")
-def logout(response: Response):
-    s = get_settings()
-    domain = (s.session_cookie_domain or "").strip() or None
-    response.delete_cookie(COOKIE, path="/", domain=domain)
+def logout(request: Request, response: Response):
+    d = _cookie_options(request)["domain"]
+    response.delete_cookie(COOKIE, path="/", domain=d)
+    response.delete_cookie("ip_session", path="/", domain=d)
     return {"ok": True}

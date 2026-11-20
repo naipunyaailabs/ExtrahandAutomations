@@ -250,6 +250,102 @@ async def _template_info(name: str) -> dict[str, Any]:
     }
 
 
+SENT_STATUSES = ("sent", "delivered", "read")  # a welcome that left for WhatsApp (not failed / skipped / simulated)
+
+
+@router.get("/dashboard")
+def welcomers_dashboard(refresh: bool = False, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Welcomer Dashboard: helper and customer registrations on ExtraHand (real users, last 31 days) next to the
+    welcome messages sent to them: today, this week, this month, day by day, the funnel, cities and hours."""
+    state = _state(db)
+    ledger = _ledger(db)
+    now_ist = datetime.now(IST)
+    today = now_ist.date()
+    week_start = today - timedelta(days=today.weekday())
+    month_start = today.replace(day=1)
+    days = [(today - timedelta(days=i)).isoformat() for i in range(29, -1, -1)]
+    daily = {d: {"date": d, "helper_registered": 0, "customer_registered": 0, "helper_sent": 0, "customer_sent": 0,
+                 "helper_read": 0, "customer_read": 0} for d in days}
+    cities: dict[str, int] = {}
+    hours = [0] * 24
+    audiences: dict[str, Any] = {}
+    errors = []
+
+    def period_of(d: str) -> list[str]:
+        out = ["last30"] if d in daily else []
+        if d == today.isoformat():
+            out.append("today")
+        if d >= week_start.isoformat():
+            out.append("week")
+        if d >= month_start.isoformat():
+            out.append("month")
+        return out
+
+    for a in AUDIENCES:
+        reg = _registrations(a, force=refresh)
+        if reg.get("error"):
+            errors.append(f"{a}: {reg['error']}")
+        outcome, _ = _outcomes(db, a)
+        blank = {"registered": 0, "sent": 0, "delivered": 0, "read": 0, "failed": 0}
+        periods = {k: dict(blank) for k in ("today", "week", "month", "last30")}
+        funnel = {"registered": 0, "with_phone": 0, "welcomed": 0, "delivered": 0, "read": 0}
+        outcomes = {k: 0 for k in ("read", "delivered", "welcomed", "failed", "no_phone", "welcomer_off", "pending")}
+
+        # registrations (from ExtraHand) and what happened to each person's welcome
+        for u in reg["users"]:
+            d = _ist_day(u["registered_at"])
+            for k in period_of(d):
+                periods[k]["registered"] += 1
+            if d not in daily:
+                continue
+            daily[d][f"{a}_registered"] += 1
+            o = outcome(u)
+            outcomes[o] += 1
+            funnel["registered"] += 1
+            funnel["with_phone"] += int(u["has_phone"])
+            funnel["welcomed"] += int(o in ("welcomed", "delivered", "read"))
+            funnel["delivered"] += int(o in ("delivered", "read"))
+            funnel["read"] += int(o == "read")
+            city = (u.get("city") or "").strip().title()
+            if city:
+                cities[city] = cities.get(city, 0) + 1
+            hours[u["registered_at"].replace(tzinfo=timezone.utc).astimezone(IST).hour] += 1
+
+        # welcome messages (from our own records), by the day they were sent
+        for w in db.query(WhatsAppWelcome).filter(WhatsAppWelcome.audience == a):
+            st = _delivery(w, ledger)
+            d = _ist_day(w.created_at)
+            for k in period_of(d):
+                if st in SENT_STATUSES:
+                    periods[k]["sent"] += 1
+                    periods[k]["delivered"] += int(st in ("delivered", "read"))
+                    periods[k]["read"] += int(st == "read")
+                elif st == "failed":
+                    periods[k]["failed"] += 1
+            if d in daily and st in SENT_STATUSES:
+                daily[d][f"{a}_sent"] += 1
+                daily[d][f"{a}_read"] += int(st == "read")
+
+        sent_all = sum(1 for w in db.query(WhatsAppWelcome).filter(WhatsAppWelcome.audience == a)
+                       if _delivery(w, ledger) in SENT_STATUSES)
+        audiences[a] = {
+            "active": state[a]["active"], "since": state[a]["since"], "template": AUDIENCES[a]["template"],
+            "periods": periods, "funnel": funnel, "outcomes": outcomes, "sent_all_time": sent_all,
+            "coverage": round(100 * funnel["welcomed"] / funnel["with_phone"], 1) if funnel["with_phone"] else None,
+            "read_rate": round(100 * funnel["read"] / funnel["welcomed"], 1) if funnel["welcomed"] else None,
+        }
+
+    return {
+        "audiences": audiences,
+        "daily": list(daily.values()),  # oldest first, 30 days
+        "top_cities": [{"city": c, "registered": n} for c, n in sorted(cities.items(), key=lambda x: -x[1])[:8]],
+        "hours": hours,  # registrations by India hour of day, last 30 days
+        "last_check": iso(_last_check["when"]),
+        "fetched_at": iso(max((h["fetched_at"] for h in _history_cache.values()), default=None)),
+        "errors": errors,
+    }
+
+
 @router.get("/{audience}")
 async def welcomer_detail(audience: Audience, db: Session = Depends(get_db)) -> dict[str, Any]:
     st = welcomers_status(db)[audience]

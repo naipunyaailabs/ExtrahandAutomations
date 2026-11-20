@@ -12,6 +12,7 @@ import CallDetailPage from "./pages/CallDetail";
 import Calls from "./pages/Calls";
 import Dashboard from "./pages/Dashboard";
 import LoginPage from "./pages/Login";
+import { WaWelcomerDashboard } from "./pages/WaWelcomerDashboard";
 import { ReportsPage } from "./pages/Reports";
 import { RegionsPage } from "./pages/Regions";
 import Settings from "./pages/Settings";
@@ -147,7 +148,8 @@ function AuthedApp() {
           <Route path="/whatsapp/replies" element={<WhatsAppPage section="send" />} />
           <Route path="/whatsapp/device" element={<WhatsAppPage section="device" />} />
           <Route path="/whatsapp/messages" element={<WaSentMessages />} />
-          <Route path="/whatsapp/welcomers" element={<Navigate to="/whatsapp/welcomers/helper" replace />} />
+          <Route path="/whatsapp/welcomers" element={<Navigate to="/whatsapp/welcomers/dashboard" replace />} />
+          <Route path="/whatsapp/welcomers/dashboard" element={<WaWelcomerDashboard />} />
           <Route path="/whatsapp/welcomers/helper" element={<WaWelcomer audience="helper" />} />
           <Route path="/whatsapp/welcomers/customer" element={<WaWelcomer audience="customer" />} />
           <Route path="/whatsapp/welcomers/commercials" element={<WaWelcomerCommercials />} />

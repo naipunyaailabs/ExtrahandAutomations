@@ -857,6 +857,7 @@ export interface AuthUser {
   role: string;
   /** False on a development server that has no login configured. */
   auth_enabled: boolean;
+  token?: string;
 }
 
 // ---- call detail -----------------------------------------------------------------------------------------
@@ -1982,4 +1983,28 @@ export interface SeedTemplateView {
   name: string;
   languages: SeedTemplateLanguage[];
   clicks_tracked: boolean | null;
+}
+
+/** Welcomer Dashboard: registrations (ExtraHand) and welcome messages, per audience */
+export interface WaWelcomerDashPeriod { registered: number; sent: number; delivered: number; read: number; failed: number }
+export interface WaWelcomerDashAudience {
+  active: boolean;
+  since: string | null;
+  template: string;
+  periods: Record<"today" | "week" | "month" | "last30", WaWelcomerDashPeriod>;
+  funnel: { registered: number; with_phone: number; welcomed: number; delivered: number; read: number };
+  outcomes: { read: number; delivered: number; welcomed: number; failed: number; no_phone: number; welcomer_off: number; pending: number };
+  sent_all_time: number;
+  coverage: number | null;
+  read_rate: number | null;
+}
+export interface WaWelcomerDashboard {
+  audiences: { helper: WaWelcomerDashAudience; customer: WaWelcomerDashAudience };
+  daily: { date: string; helper_registered: number; customer_registered: number; helper_sent: number; customer_sent: number;
+    helper_read: number; customer_read: number }[];
+  top_cities: { city: string; registered: number }[];
+  hours: number[];
+  last_check: string | null;
+  fetched_at: string | null;
+  errors: string[];
 }

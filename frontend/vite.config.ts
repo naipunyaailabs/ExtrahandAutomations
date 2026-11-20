@@ -9,12 +9,16 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     server: {
-      port: Number(env.VITE_DEV_PORT) || 5180,
+      port: Number(env.VITE_DEV_PORT) || 3074,
+      strictPort: true,
       proxy: {
         "/api": {
           target: apiTarget,
           changeOrigin: true,
           secure: false,
+          xfwd: true,
+          cookieDomainRewrite: "",
+          cookiePathRewrite: "/",
         },
       },
     },

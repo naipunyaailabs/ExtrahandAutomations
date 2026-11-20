@@ -13,6 +13,27 @@ import { createPricingService } from "./services/pricing";
 import type { AuthUser, CompetitorPriceInput, CompetitorPriceItem, PricingOverview } from "./types";
 
 export const AUTH_EXPIRED_EVENT = "ip_auth_expired";
+export const TOKEN_STORAGE_KEY = "extrahand_token";
+
+export function getSessionToken(): string | null {
+  try {
+    return sessionStorage.getItem(TOKEN_STORAGE_KEY) || localStorage.getItem(TOKEN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setSessionToken(token: string | null) {
+  try {
+    if (token) {
+      sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
+      localStorage.setItem(TOKEN_STORAGE_KEY, token);
+    } else {
+      sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+      localStorage.removeItem(TOKEN_STORAGE_KEY);
+    }
+  } catch {}
+}
 
 // One backend for everything (empty = the page's own address)
 export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
@@ -53,11 +74,20 @@ export async function request<T>(
   const url = resolveUrl(path, serviceUrl);
   let res: Response;
   const isFormData = typeof FormData !== "undefined" && body instanceof FormData;
+  const token = getSessionToken();
+  const headers: Record<string, string> = {};
+  if (body && !isFormData) {
+    headers["Content-Type"] = "application/json";
+  }
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+    headers["X-Session-Token"] = token;
+  }
   try {
     res = await fetch(url, {
       method,
       credentials: "include",
-      headers: body && !isFormData ? { "Content-Type": "application/json" } : undefined,
+      headers: Object.keys(headers).length ? headers : undefined,
       body: isFormData ? (body as FormData) : body ? JSON.stringify(body) : undefined,
     });
   } catch {
@@ -67,7 +97,7 @@ export async function request<T>(
   }
 
   if (!res.ok) {
-    if (res.status === 401 && !path.startsWith("/api/auth/")) {
+    if (res.status === 401 && !path.startsWith("/api/auth/") && !path.startsWith("/api/public-config")) {
       window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
     }
     let msg = `${res.status} ${res.statusText}`;
@@ -128,9 +158,23 @@ export const api = {
 
   // Auth & Session
   auth: {
-    login: (email: string, password: string, remember = true) =>
-      request<AuthUser>("POST", "/api/auth/login", { email, password, remember }, API_BASE_URL),
-    me: () => request<AuthUser>("GET", "/api/auth/me", undefined, API_BASE_URL),
-    logout: () => request<{ ok: boolean }>("POST", "/api/auth/logout", undefined, API_BASE_URL),
+    login: async (email: string, password: string, remember = true) => {
+      const user = await request<AuthUser>("POST", "/api/auth/login", { email, password, remember }, API_BASE_URL);
+      if (user.token) {
+        setSessionToken(user.token);
+      }
+      return user;
+    },
+    me: async () => {
+      const user = await request<AuthUser>("GET", "/api/auth/me", undefined, API_BASE_URL);
+      if (user.token) {
+        setSessionToken(user.token);
+      }
+      return user;
+    },
+    logout: async () => {
+      setSessionToken(null);
+      return request<{ ok: boolean }>("POST", "/api/auth/logout", undefined, API_BASE_URL);
+    },
   },
 };

@@ -139,3 +139,30 @@ def test_people_lists_every_registration_with_its_outcome(client, db, fake, monk
     assert [p["name"] for p in sent_only["items"]] == ["Sita Devi"] and sent_only["items"][0]["welcomed_at"]
     assert client.get("/api/whatsapp/welcomers/helper/people", params={"q": "timer"}).json()["total"] == 1
     assert client.get("/api/whatsapp/welcomers/helper/people", params={"day": "2000-01-01"}).json()["total"] == 0
+
+
+def test_dashboard_counts_registrations_and_welcomes_for_both_audiences(client, db, fake, monkeypatch):
+    users, sent = fake
+    monkeypatch.setattr(welcomers, "_history_cache", {})
+    users.extend([
+        _user("before", "partner", 30, phone="9000000040"),  # registered while the helper welcomer was off
+        _user("nophone", "partner", 20, phone=""),
+        _user("cbefore", "customer", 15, phone="9000000041"),
+        _user("tester", "partner", 10, phone="9000000042", isPaymentTester=True),  # test account: not counted
+    ])
+    client.post("/api/whatsapp/welcomers/helper/activate")
+    client.post("/api/whatsapp/welcomers/customer/activate")
+    users.extend([_user("hnew", "partner", -1, phone="9000000043"), _user("cnew", "customer", -1, phone="9000000044")])
+    client.post("/api/whatsapp/welcomers/check-now")
+    welcomers._history_cache.clear()
+
+    d = client.get("/api/whatsapp/welcomers/dashboard").json()
+    h, c = d["audiences"]["helper"], d["audiences"]["customer"]
+    assert h["active"] and c["active"]
+    assert h["periods"]["last30"]["registered"] == 3 and c["periods"]["last30"]["registered"] == 2
+    assert h["periods"]["today"]["sent"] == 1 and c["periods"]["today"]["sent"] == 1
+    assert h["funnel"] == {"registered": 3, "with_phone": 2, "welcomed": 1, "delivered": 0, "read": 0}
+    assert h["outcomes"]["welcomer_off"] == 1 and h["outcomes"]["no_phone"] == 1
+    assert h["coverage"] == 50.0 and c["coverage"] == 50.0
+    assert len(d["daily"]) == 30 and sum(x["helper_registered"] for x in d["daily"]) == 3
+    assert sum(x["customer_sent"] for x in d["daily"]) == 1 and len(d["hours"]) == 24 and sum(d["hours"]) == 5

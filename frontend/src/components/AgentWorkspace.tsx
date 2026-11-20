@@ -133,6 +133,7 @@ const AGENTS: Record<AgentKind, { title: string; subtitle: string; icon: LucideI
       {
         title: "Welcomers",
         items: [
+          { to: "/whatsapp/welcomers/dashboard", label: "Welcomer Dashboard", icon: LayoutDashboard },
           { to: "/whatsapp/welcomers/helper", label: "Helper Welcomer", icon: HandHeart },
           { to: "/whatsapp/welcomers/customer", label: "Customer Welcomer", icon: UserRoundPlus },
           { to: "/whatsapp/welcomers/commercials", label: "Welcomer Commercials", icon: Receipt },

@@ -74,7 +74,10 @@ def test_routes_the_phone_provider_and_the_voice_agent_call_stay_reachable(clien
 def test_login_gives_a_http_only_session_cookie_that_opens_the_api(client, secured):
     r = login(client)
     assert r.status_code == 200
-    assert r.json() == {"email": USER["email"], "name": USER["name"], "role": USER["role"], "auth_enabled": True}
+    body = r.json()
+    token = body.pop("token")  # also given to the dashboard, as a fallback when a browser blocks the cookie
+    assert body == {"email": USER["email"], "name": USER["name"], "role": USER["role"], "auth_enabled": True}
+    assert auth.read_session(token)["e"] == USER["email"]
     cookie = r.headers["set-cookie"].lower()
     assert "httponly" in cookie and "samesite=lax" in cookie and "path=/" in cookie and "secure" not in cookie
     assert client.get("/api/calls").status_code == 200
@@ -84,7 +87,9 @@ def test_login_gives_a_http_only_session_cookie_that_opens_the_api(client, secur
 
 def test_the_cookie_is_marked_secure_when_the_setting_says_so(client, secured, settings):
     settings(session_cookie_secure="true")
-    assert "secure" in login(client).headers["set-cookie"].lower()
+    r = client.post("/api/auth/login", json={"email": USER["email"], "password": PASSWORD, "remember": True},
+                    headers={"x-forwarded-proto": "https"})
+    assert "secure" in r.headers["set-cookie"].lower()  # over https (behind the proxy: X-Forwarded-Proto)
 
 
 def test_the_email_is_not_case_sensitive(client, secured):
@@ -179,7 +184,9 @@ def test_the_single_admin_from_env_signs_in_and_everything_else_needs_a_session(
     assert login(client, password="a-long-admin-pass", email="someone@else.in").status_code == 401
     r = login(client, password="a-long-admin-pass", email=" admin@extrahand.in ")
     assert r.status_code == 200, r.text
-    assert r.json() == {"email": "admin@extrahand.in", "name": "Sai", "role": "Admin", "auth_enabled": True}
+    body = r.json()
+    token = body.pop("token")
+    assert body == {"email": "admin@extrahand.in", "name": "Sai", "role": "Admin", "auth_enabled": True}
     assert client.get("/api/auth/me").json()["role"] == "Admin"
     assert client.get("/api/stats").status_code == 200
     client.post("/api/auth/logout")
@@ -197,3 +204,38 @@ def test_admin_login_readiness_in_production(settings):
     s = settings(admin_password="a-long-admin-pass", auth_secret="k" * 40)
     checks = {c.id: c for c in static_checks(s)}
     assert checks["login"].status == "ok" and checks["session_secret"].status == "ok"
+
+
+def test_session_cookie_fits_the_address_the_browser_is_on(client, settings):
+    settings(admin_email="admin@extrahand.in", admin_password="a-long-admin-pass", auth_secret="k" * 40,
+             session_cookie_domain=".extrahand.in", session_cookie_secure="true")
+    body = {"email": "admin@extrahand.in", "password": "a-long-admin-pass"}
+    # on another address (localhost, a server IP): no foreign domain, or the browser would drop the cookie
+    r = client.post("/api/auth/login", json=body, headers={"host": "localhost:3074"})
+    assert r.status_code == 200 and "domain=" not in r.headers["set-cookie"].lower()
+    # on the real site over https: shared with the subdomains, Secure
+    r = client.post("/api/auth/login", json=body, headers={"host": "intelligence.extrahand.in", "x-forwarded-proto": "https"})
+    cookie = r.headers["set-cookie"].lower()
+    assert "domain=.extrahand.in" in cookie and "secure" in cookie
+    # plain http on a server address: not Secure, or the browser would drop it
+    r = client.post("/api/auth/login", json=body, headers={"host": "203.0.113.9", "x-forwarded-proto": "http"})
+    assert "secure" not in r.headers["set-cookie"].lower()
+
+
+
+def test_only_the_configured_admin_and_password_sign_in(client, settings):
+    settings(admin_email="admin@extrahand.in", admin_password="a-long-admin-pass", auth_secret="k" * 40,
+             session_cookie_secure="false")
+    # no built-in passwords, no other emails, no made-up accounts
+    for email, password in [("admin@extrahand.in", "admin"), ("admin@extrahand.in", "admin@123"),
+                            ("admin@cognitbotz.com", "a-long-admin-pass"), ("anyone@else.in", "admin")]:
+        assert login(client, password=password, email=email).status_code == 401, (email, password)
+        auth.THROTTLE.reset()
+    # the token alone opens the API (for browsers that block the cookie)
+    token = login(client, password="a-long-admin-pass", email="admin@extrahand.in").json()["token"]
+    client.cookies.clear()
+    assert client.get("/api/stats").status_code == 401
+    assert client.get("/api/stats", headers={"Authorization": f"Bearer {token}"}).status_code == 200
+    # changing the admin email signs the old session out
+    settings(admin_email="new@extrahand.in")
+    assert client.get("/api/stats", headers={"Authorization": f"Bearer {token}"}).status_code == 401

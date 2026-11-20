@@ -21,6 +21,7 @@ import type {
   WaRates,
   WaSentMessagesPage,
   WaAudience,
+  WaWelcomerDashboard,
   WaWelcomerCommercials,
   WaWelcomerDetail,
   WaWelcomerHistory,
@@ -64,6 +65,8 @@ export function createWhatsAppService(
     /** Task alert template (new task -> matching helpers) as shown on the Dispatch dashboard */
     taskAlertTemplate: (ticketId?: string) =>
       get<WaTaskAlertTemplate>(`/api/whatsapp/task-alert-template${ticketId ? `?ticket_id=${encodeURIComponent(ticketId)}` : ""}`),
+    welcomerDashboard: (refresh = false) =>
+      get<WaWelcomerDashboard>(`/api/whatsapp/welcomers/dashboard${refresh ? "?refresh=true" : ""}`),
     welcomer: (audience: WaAudience) => get<WaWelcomerDetail>(`/api/whatsapp/welcomers/${audience}`),
     activateWelcomer: (audience: WaAudience) => post<WaWelcomerState>(`/api/whatsapp/welcomers/${audience}/activate`),
     deactivateWelcomer: (audience: WaAudience) => post<WaWelcomerState>(`/api/whatsapp/welcomers/${audience}/deactivate`),

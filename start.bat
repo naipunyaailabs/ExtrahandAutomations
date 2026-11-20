@@ -35,7 +35,7 @@ echo   Dashboard + API : http://localhost:%BACKEND_PORT%
 echo   Telephony       : Cloudflare Tunnel (auto-syncs PUBLIC_BASE_URL)
 echo.
 echo   Developing the UI with live reload? Run "npm run dev" in frontend
-echo   (port 5180, it forwards /api to %BACKEND_PORT%).
+echo   (port 3074, it forwards /api to %BACKEND_PORT%).
 echo ========================================================================
 echo.
 timeout /t 5 >nul
