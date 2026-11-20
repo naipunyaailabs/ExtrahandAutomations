@@ -29,8 +29,8 @@ services:
         required: false
     environment:
       PORT: "5074"
-      PUBLIC_BASE_URL: "https://backend.intelligence.extrahand.in"
-      TASK_SEEDING_LINK_BASE: "https://backend.intelligence.extrahand.in"
+      PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-https://backend.intelligence.extrahand.in}"
+      TASK_SEEDING_LINK_BASE: "${TASK_SEEDING_LINK_BASE:-https://backend.intelligence.extrahand.in}"
       TRUST_PROXY_HEADERS: "true"
     ports:
       - "127.0.0.1:5074:5074"   # only nginx on this server reaches it (Docker would bypass the firewall otherwise)
