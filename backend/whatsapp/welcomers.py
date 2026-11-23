@@ -193,7 +193,11 @@ def run_welcomers(db: Session, force: bool = False) -> dict[str, int]:
                                   registered_at=user["registered_at"], template=AUDIENCES[audience]["template"],
                                   status="sending")
             db.add(row)
-            db.commit()  # claim the user first: a crash mid-send must not welcome them twice
+            try:
+                db.commit()  # claim the user first: a crash mid-send must not welcome them twice
+            except Exception:
+                db.rollback()
+                continue  # already claimed by another worker (server or local)
             try:
                 status, mid, err = asyncio.run(_send(audience, user))
             except Exception as e:  # noqa: BLE001
