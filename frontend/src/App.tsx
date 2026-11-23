@@ -15,6 +15,7 @@ import LoginPage from "./pages/Login";
 import { WaWelcomerDashboard } from "./pages/WaWelcomerDashboard";
 import { ReportsPage } from "./pages/Reports";
 import { RegionsPage } from "./pages/Regions";
+import { EngagementCategoriesPage } from "./pages/EngagementCategories";
 import Settings from "./pages/Settings";
 import TicketDetail from "./pages/TicketDetail";
 import VoiceIvr from "./pages/VoiceIvr";
@@ -109,6 +110,8 @@ function AuthedApp() {
           <Route path="/feedback" element={<Navigate to="/feedback/reviews" replace />} />
           <Route path="/engagement" element={<ReportsPage />} />
           <Route path="/engagement/dashboard" element={<ReportsPage />} />
+          <Route path="/engagement/customers" element={<EngagementCategoriesPage />} />
+          <Route path="/engagement/categories" element={<EngagementCategoriesPage />} />
           <Route path="/engagement/regions" element={<RegionsPage />} />
           <Route path="/reports" element={<ReportsPage />} />
           <Route path="/settings" element={<Settings />} />

@@ -2,6 +2,7 @@ import { AnimatePresence, LayoutGroup, motion } from "framer-motion";
 import {
   ArrowLeft,
   AudioLines,
+  Award,
   History,
   LayoutDashboard,
   LifeBuoy,
@@ -196,6 +197,7 @@ const AGENTS: Record<AgentKind, { title: string; subtitle: string; icon: LucideI
         title: "Overview",
         items: [
           { to: "/engagement/dashboard", label: "Dashboard", icon: LayoutDashboard, match: ["/engagement/dashboard", "/reports"] },
+          { to: "/engagement/customers", label: "Customer Engagement", icon: Award, match: ["/engagement/customers", "/engagement/categories"] },
           { to: "/engagement/regions", label: "Regions", icon: MapPin },
         ],
       },

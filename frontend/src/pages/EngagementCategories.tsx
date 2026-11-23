@@ -97,13 +97,13 @@ export const EngagementCategoriesPage: React.FC = () => {
         marginBottom: "1rem", paddingBottom: "0.9rem", borderBottom: "1px solid var(--border)" }}>
         <div>
           <div style={{ fontSize: "11px", fontWeight: 700, color: "#4f46e5", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-            User Engagement · Category
+            User Engagement · Customer Engagement
           </div>
           <h1 style={{ margin: "1px 0 0", fontSize: "1.3rem", fontWeight: 800, color: "var(--text)" }}>
-            Customer categories · {data?.month_label ?? "This month"}
+            Customer Engagement · {data?.month_label ?? "This month"}
           </h1>
           <div style={{ fontSize: "12px", color: "var(--muted)", marginTop: "3px" }}>
-            Real customers grouped by the orders they placed in the month
+            Real customers grouped by the orders they placed in the month (Diamond, Gold, Platinum, Silver)
             {data && ` · ${n(data.registered_customers)} customers, ${n(data.active_customers)} ordered (${n(data.orders_in_month)} orders)`}
           </div>
         </div>
