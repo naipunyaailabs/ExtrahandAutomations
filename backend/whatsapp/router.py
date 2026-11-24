@@ -112,7 +112,7 @@ async def get_whatsapp_channel_controls():
 
 
 @router.post("/channel-controls")
-async def update_whatsapp_channel_controls(payload: ChannelControlsPayload):
+def update_whatsapp_channel_controls(payload: ChannelControlsPayload):
     """Toggle active/inactive status for Automation or Bulk messaging (each independently)."""
     from app.database import SessionLocal
     from app.services.common import save_runtime_settings
@@ -146,8 +146,10 @@ def whatsapp_flow_today():
 
 
 @router.get("/status")
-async def check_whatsapp_status():
-    """Check Meta WhatsApp Cloud API status, connection and message stats."""
+def check_whatsapp_status():
+    """Check Meta WhatsApp Cloud API status, connection and message stats.
+    A plain def: FastAPI runs it on a worker thread, so the database counting (and the Meta call every 60 s) never
+    holds up other requests the way blocking work inside an async def does."""
     import re
     from datetime import datetime
     from app.database import SessionLocal
@@ -313,7 +315,7 @@ class BroadcastTaskPayload(BaseModel):
 
 
 @router.get("/task-candidates/{ticket_id}")
-async def get_task_location_candidates(ticket_id: str, radius_km: Optional[float] = None):
+def get_task_location_candidates(ticket_id: str, radius_km: Optional[float] = None):
     """Retrieve helper candidates filtered by location and trade service taxonomy."""
     from .agent import get_whatsapp_dispatch_agent
     from app.database import SessionLocal

@@ -356,6 +356,12 @@ def start_poller() -> None:
                         _cache[key] = (time.time(), value)
             except Exception as exc:  # noqa: BLE001 - keep polling; the dashboard reports the problem itself
                 logger.warning("[User Engagement] Background refresh from ExtraHand failed: %s", exc)
+            try:  # Welcomer history / dashboard: their signup lists take ~40 s to read, so they are read here too
+                from whatsapp.welcomers import warm_registrations
+
+                warm_registrations()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[User Engagement] Welcomer signups refresh failed: %s", exc)
             time.sleep(POLL_SECONDS)
 
     threading.Thread(target=_loop, daemon=True, name="engagement-poller").start()

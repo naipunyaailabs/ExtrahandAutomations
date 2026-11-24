@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
@@ -501,15 +502,54 @@ HISTORY_TTL = 300  # seconds the ExtraHand registrations are cached
 _history_cache: dict[str, dict[str, Any]] = {}
 
 
+_refreshing: set[str] = set()
+_refresh_lock = threading.Lock()
+
+
 def _registrations(audience: str, force: bool = False) -> dict[str, Any]:
-    """Real ExtraHand signups of this audience in the last 31 days, from the ExtraHand API (cached 5 min)."""
+    """Real ExtraHand signups of this audience in the last 31 days. Reading them takes ~40 s, so a page never waits
+    for it once they were read: older than 5 min, the saved copy is returned at once and read again in the background
+    (the engagement poller also reads them every 5 min, from the start). Only the very first read, or Refresh, waits."""
+    hit = _history_cache.get(audience)
+    if hit and not force:
+        if time.monotonic() - hit["at"] >= HISTORY_TTL:
+            _refresh_in_background(audience)
+        return hit
+    return _read_registrations(audience)
+
+
+def _refresh_in_background(audience: str) -> None:
+    with _refresh_lock:
+        if audience in _refreshing:
+            return
+        _refreshing.add(audience)
+
+    def run() -> None:
+        try:
+            _read_registrations(audience)
+        except Exception as exc:  # noqa: BLE001 - keep showing the saved copy
+            log.warning("Welcomer history %s: background read failed: %s", audience, exc)
+        finally:
+            with _refresh_lock:
+                _refreshing.discard(audience)
+
+    threading.Thread(target=run, daemon=True, name=f"welcomer-history-{audience}").start()
+
+
+def warm_registrations() -> None:
+    """Reads every audience's signups (called by the engagement poller at start and every 5 minutes)."""
+    for audience in AUDIENCES:
+        try:
+            _read_registrations(audience)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Welcomer history %s: warm-up read failed: %s", audience, exc)
+
+
+def _read_registrations(audience: str) -> dict[str, Any]:
     from app.integrations.extrahand import get_source
     from app.integrations.mapping import normalize_user
     from app.services.real_data import is_real_user
 
-    hit = _history_cache.get(audience)
-    if hit and not force and time.monotonic() - hit["at"] < HISTORY_TTL:
-        return hit
     cfg = AUDIENCES[audience]
     since = utcnow() - timedelta(days=HISTORY_DAYS)
     since_iso = since.isoformat(timespec="milliseconds") + "Z"
