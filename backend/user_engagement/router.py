@@ -54,6 +54,71 @@ def get_regions_endpoint() -> Dict[str, Any]:
         raise HTTPException(503, f"ExtraHand is not reachable right now: {exc}") from exc
 
 
+@engagement_router.get("/api/engagement/cancellations/summary")
+def get_cancellations_summary_endpoint(
+    side: str = Query(default="customer", pattern="^(customer|team|unknown|all)$"),
+    date_from: Optional[str] = Query(default=None, alias="from", pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    date_to: Optional[str] = Query(default=None, alias="to", pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    city: Optional[str] = None,
+    category: Optional[str] = None,
+    reason: Optional[str] = None,
+    q: Optional[str] = None,
+) -> Dict[str, Any]:
+    """The numbers on the Cancelled Works cards, computed here from the live ExtraHand data for the given filters:
+    cancelled (count, booking value, % of finished bookings), refunded (count, %, returned, paid), not refunded
+    (count, %, value, paid bookings), completed (count, money received, average). Dates are India days (to exclusive)."""
+    from fastapi import HTTPException
+
+    from .cancellations import cancellations_summary, summarize
+    from .extrahand_data import EngagementDataUnavailable, live_enabled
+
+    if not live_enabled():
+        raise HTTPException(503, "Cancelled Works need live ExtraHand data (EXTRAHAND_MODE=live).")
+    try:
+        data = cancellations_summary()
+    except EngagementDataUnavailable as exc:
+        raise HTTPException(503, f"ExtraHand is not reachable right now: {exc}") from exc
+    if data is None:
+        return {"loading": True}
+    return summarize(data, side, date_from, date_to, city, category, reason, q)
+
+
+@engagement_router.get("/api/engagement/cancellations")
+def get_cancellations_endpoint() -> Dict[str, Any]:
+    """Every real-customer Work that was cancelled, newest first: who cancelled it (customer / ExtraHand team /
+    not recorded), the reason, when, and whether it was refunded ({loading: true} during the first read)."""
+    from fastapi import HTTPException
+
+    from .cancellations import cancellations_summary
+    from .extrahand_data import EngagementDataUnavailable, live_enabled
+
+    if not live_enabled():
+        raise HTTPException(503, "Cancelled Works need live ExtraHand data (EXTRAHAND_MODE=live).")
+    try:
+        data = cancellations_summary()
+        return data if data is not None else {"loading": True}
+    except EngagementDataUnavailable as exc:
+        raise HTTPException(503, f"ExtraHand is not reachable right now: {exc}") from exc
+
+
+@engagement_router.get("/api/engagement/refunds")
+def get_refunds_endpoint() -> Dict[str, Any]:
+    """Every refund to a real customer, newest first, joined to its Work: amount, what was paid, fee kept, status,
+    Razorpay id, reason, who started it and how long after the cancellation ({loading: true} during the first read)."""
+    from fastapi import HTTPException
+
+    from .extrahand_data import EngagementDataUnavailable, live_enabled
+    from .refunds import refunds_summary
+
+    if not live_enabled():
+        raise HTTPException(503, "Refunds need live ExtraHand data (EXTRAHAND_MODE=live).")
+    try:
+        data = refunds_summary()
+        return data if data is not None else {"loading": True}
+    except EngagementDataUnavailable as exc:
+        raise HTTPException(503, f"ExtraHand is not reachable right now: {exc}") from exc
+
+
 @engagement_router.get("/api/engagement/categories")
 def get_customer_categories_endpoint(
     month: Optional[str] = Query(default=None, pattern=r"^\d{4}-\d{2}$"),

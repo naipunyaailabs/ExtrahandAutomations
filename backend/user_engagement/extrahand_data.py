@@ -246,7 +246,7 @@ def _load_helpers() -> Dict[str, Any]:
     and how many are verified. Read whole (about 20 pages) because ExtraHand ignores filters such as isVerified."""
     today = now_ist().date()
     month_start = today.replace(day=1)
-    total = new_today = new_month = verified = aadhaar = with_jobs = blocked = 0
+    total = new_today = new_month = verified = aadhaar = pan = bank = kyc = with_jobs = blocked = 0
     page = 1
     while page <= 60:
         data = _get("/users", {"role": "partner", "page": page, "limit": 100, "sortBy": "createdAt", "sortOrder": "desc"})
@@ -262,6 +262,9 @@ def _load_helpers() -> Dict[str, Any]:
                 new_today += 1 if day == today else 0
             verified += 1 if u.get("isVerified") else 0
             aadhaar += 1 if u.get("isAadhaarVerified") else 0
+            pan += 1 if u.get("isPANVerified") else 0
+            bank += 1 if u.get("isBankVerified") else 0
+            kyc += 1 if (u.get("isAadhaarVerified") and u.get("isPANVerified") and u.get("isBankVerified")) else 0
             with_jobs += 1 if int(u.get("completedTasks") or 0) > 0 else 0
             blocked += 1 if (u.get("bannedAt") or u.get("suspendedAt")
                              or str(u.get("status") or "active").lower() not in ("active", "")) else 0
@@ -269,7 +272,8 @@ def _load_helpers() -> Dict[str, Any]:
             break
         page += 1
     return {"total": total, "new_today": new_today, "new_month": new_month, "verified": verified,
-            "aadhaar_verified": aadhaar, "with_completed_jobs": with_jobs, "blocked": blocked}
+            "aadhaar_verified": aadhaar, "pan_verified": pan, "bank_verified": bank, "kyc_complete": kyc,
+            "with_completed_jobs": with_jobs, "blocked": blocked}
 
 
 def helpers_summary() -> Dict[str, Any]:
@@ -313,6 +317,24 @@ def _load_regions_lazy() -> Dict[str, Any]:
     return _load_regions()
 
 
+def _load_cancellations_lazy() -> Dict[str, Any]:
+    from .cancellations import _load_cancellations  # cancellations.py imports this module
+
+    return _load_cancellations()
+
+
+def _load_refund_records_lazy() -> List[Dict[str, Any]]:
+    from .refunds import _load_records
+
+    return _load_records()
+
+
+def _load_refunds_lazy() -> Dict[str, Any]:
+    from .refunds import _load_refunds
+
+    return _load_refunds()
+
+
 def start_poller() -> None:
     """Read ExtraHand when the backend starts and then every 5 minutes (the approved polling interval), so the
     dashboard always opens from fresh cached data. Does nothing unless EXTRAHAND_MODE=live."""
@@ -326,6 +348,8 @@ def start_poller() -> None:
             try:
                 for key, loader in (("test_accounts", _load_test_accounts), ("tasks", _load_all_tasks),
                                     ("customers", _load_customers), ("helpers", _load_helpers), ("regions", _load_regions_lazy),
+                                    ("refund_records", _load_refund_records_lazy),
+                                    ("cancellations", _load_cancellations_lazy), ("refunds", _load_refunds_lazy),
                                     ("support", _load_support)):
                     value = loader()
                     with _lock:

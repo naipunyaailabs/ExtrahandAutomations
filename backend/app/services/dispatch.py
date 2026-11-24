@@ -98,6 +98,8 @@ def upsert_helper(db: Session, rec: dict) -> Helper:
         "status", "is_active", "is_verified", "can_accept_tasks", "work_shift_type",
     )
     for k in scalar_fields:
+        if k == "is_verified" and rec.get("verified_known") is False:
+            continue  # this record did not say whether the helper is Aadhaar verified: keep what we know
         if rec.get(k) is not None:
             setattr(h, k, rec[k])
     if rec.get("skills") is not None:
@@ -112,8 +114,16 @@ def upsert_helper(db: Session, rec: dict) -> Helper:
     return h
 
 
+def helper_priority(c: dict) -> tuple:
+    """Order for calling / messaging helpers about a task: Aadhaar verified first, then the rest; within each group
+    the nearest first, and helpers without a known distance last."""
+    dist = c.get("distance_km")
+    return (not c.get("aadhaar_verified", c.get("is_verified", False)), dist is None, dist or 0)
+
+
 def find_candidates(db: Session, ticket: Ticket) -> tuple[list[dict], str]:
-    """Eligible helpers for the ticket's location and service, nearest first."""
+    """Eligible helpers for the ticket's location and service: Aadhaar-verified helpers first, then the rest; nearest
+    first within each group. The per-task limit is applied after this order, so verified helpers are called first."""
     rt = runtime_settings(db)
     src = get_source()
     raw = []
@@ -140,7 +150,7 @@ def find_candidates(db: Session, ticket: Ticket) -> tuple[list[dict], str]:
             seen.add(rec["id"])
             if not is_real_user(item if isinstance(item, dict) else {}, rec["id"]):
                 continue  # tester / test / mock account: never called
-            upsert_helper(db, rec)
+            helper_row = upsert_helper(db, rec)
             if not rec["phone"]:
                 continue
             # Strict matching on BOTH location AND requested service
@@ -161,6 +171,7 @@ def find_candidates(db: Session, ticket: Ticket) -> tuple[list[dict], str]:
                 "helper_id": rec["id"], "profile_id": rec["profile_id"], "name": rec["name"], "phone": rec["phone"],
                 "skills": rec["skills"], "categories": rec.get("categories", []), "city": rec.get("city"),
                 "distance_km": round(dist, 2) if dist is not None else None,
+                "aadhaar_verified": bool(helper_row.is_verified),
             })
     else:
         # Load and filter directly from local DB cache
@@ -180,10 +191,11 @@ def find_candidates(db: Session, ticket: Ticket) -> tuple[list[dict], str]:
                 "helper_id": h.id, "profile_id": h.profile_id, "name": h.name, "phone": h.phone,
                 "skills": h.skills or [], "categories": h.categories or [], "city": h.city,
                 "distance_km": round(dist, 2) if dist is not None else None,
+                "aadhaar_verified": bool(h.is_verified),
             })
 
     out = [c for c in out if _can_take_task(db, ticket, c["helper_id"])]
-    out.sort(key=lambda c: (c["distance_km"] is None, c["distance_km"] or 0))
+    out.sort(key=helper_priority)
     return out[: rt.max_helpers_per_ticket], source
 
 

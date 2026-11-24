@@ -16,6 +16,8 @@ import {
   UsersRound,
   UserX,
   Wrench,
+  XCircle,
+  MessageCircle,
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -33,7 +35,18 @@ export const REASONS: Record<string, { label: string; icon: LucideIcon; helperRe
   helper_cannot_attend: { label: "Helper cannot attend", icon: UserX, helperRelated: true },
   helper_unconfirmed: { label: "Helper did not confirm", icon: Clock3, helperRelated: true },
   customer_complaint: { label: "Customer complaint", icon: MessageSquareWarning, helperRelated: false },
+  // WhatsApp Support (whatsapp/support/tickets.py)
+  whatsapp_cancel_request: { label: "WhatsApp · Cancellation request", icon: MessageCircle, helperRelated: false },
+  whatsapp_reschedule_request: { label: "WhatsApp · Reschedule request", icon: MessageCircle, helperRelated: false },
+  whatsapp_helper_issue: { label: "WhatsApp · Helper problem", icon: MessageCircle, helperRelated: false },
+  whatsapp_payment_issue: { label: "WhatsApp · Payment problem", icon: MessageCircle, helperRelated: false },
+  whatsapp_incomplete_service: { label: "WhatsApp · Service not completed", icon: MessageCircle, helperRelated: false },
+  whatsapp_refund_request: { label: "WhatsApp · Refund request", icon: MessageCircle, helperRelated: false },
+  whatsapp_human_request: { label: "WhatsApp · Asked for a person", icon: MessageCircle, helperRelated: false },
+  whatsapp_unresolved: { label: "WhatsApp · AI could not answer", icon: MessageCircle, helperRelated: false },
+  whatsapp_other: { label: "WhatsApp · Other", icon: MessageCircle, helperRelated: false },
 };
+const isWhatsApp = (e: Escalation) => (e.source ?? "").startsWith("whatsapp");
 const reasonOf = (r: string) =>
   REASONS[r] ?? { label: r.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase()), icon: Inbox, helperRelated: false };
 
@@ -141,8 +154,8 @@ export function CustomerCareView({ escalations, loading, onChange }: { escalatio
                   className={`cc-row s-${STATUS[e.status].tone} ${selected?.id === e.id ? "on" : ""}`} onClick={() => setSelectedId(String(e.id))}>
                   <span className="cc-row-icon"><R.icon size={16} /></span>
                   <span className="cc-row-main">
-                    <b>{e.ticket?.title ?? `Task ${e.ticket_id}`}</b>
-                    <small>{R.label}{e.ticket?.customer?.name ? ` · ${e.ticket.customer.name}` : ""}</small>
+                    <b>{e.ticket?.title ?? (isWhatsApp(e) ? (e.customer_name || `+${e.customer_phone ?? ""}`) : `Task ${e.ticket_id}`)}</b>
+                    <small>{R.label}{e.ticket?.customer?.name ? ` · ${e.ticket.customer.name}` : ""}{e.source === "whatsapp_test" ? " · test" : ""}</small>
                   </span>
                   <span className="cc-row-side">
                     <span className={`cc-dot s-${STATUS[e.status].tone}`}>{STATUS[e.status].label}</span>
@@ -180,11 +193,13 @@ function CasePanel({ esc, onChange }: { esc: Escalation; onChange: () => void })
   const dirty = notes !== (esc.notes ?? "") || owner !== (esc.assigned_to ?? "");
   const scheduledPast = t?.scheduled_at ? new Date(t.scheduled_at).getTime() < Date.now() : false;
 
-  const update = (status?: Escalation["status"]) =>
+  const team = usePoll(api.careTeam, 60000);
+  const update = (status?: Escalation["status"], outcome?: "achieved" | "rejected") =>
     action.run(async () => {
-      await api.updateEscalation(esc.id, { status, notes, assigned_to: owner });
+      await api.updateEscalation(esc.id, { status, outcome, notes, assigned_to: owner });
       onChange();
-    }, status === "resolved" ? "Case resolved" : status === "in_progress" ? "You're on it" : "Notes saved");
+    }, status === "resolved" ? (outcome === "rejected" ? "Case closed as not solved" : "Case solved")
+      : status === "in_progress" ? "You're on it" : "Notes saved");
 
   return (
     <motion.section className="cc-panel" initial={{ opacity: 0, x: 12 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.18 }}>
@@ -198,6 +213,16 @@ function CasePanel({ esc, onChange }: { esc: Escalation; onChange: () => void })
       </header>
 
       {esc.details && <p className="cc-what"><b>What happened</b>{esc.details}</p>}
+
+      {!t && isWhatsApp(esc) && (
+        <dl className="cc-facts">
+          <div><dt><UserRound size={13} /> Customer</dt><dd>{esc.customer_name || "—"}{esc.customer_phone ? <> · <a href={`tel:+${esc.customer_phone.replace(/^t/, "")}`}>+{esc.customer_phone.replace(/^t/, "")}</a></> : null}</dd></div>
+          {esc.booking_id && <div><dt><Tag size={13} /> Booking</dt><dd>{esc.booking_id}</dd></div>}
+          {esc.conversation_id && (
+            <div><dt><MessageCircle size={13} /> WhatsApp</dt><dd><Link to={`/engagement/support/conversations?c=${esc.conversation_id}`}>Open the chat</Link></dd></div>
+          )}
+        </dl>
+      )}
 
       {t && (
         <>
@@ -218,10 +243,10 @@ function CasePanel({ esc, onChange }: { esc: Escalation; onChange: () => void })
       )}
 
       {esc.status === "resolved" ? (
-        <div className="cc-resolved">
-          <CheckCircle2 size={18} />
+        <div className={`cc-resolved ${esc.outcome === "rejected" ? "rejected" : ""}`}>
+          {esc.outcome === "rejected" ? <XCircle size={18} /> : <CheckCircle2 size={18} />}
           <div>
-            <b>Resolved {fmtRelative(esc.resolved_at)}{esc.assigned_to ? ` by ${esc.assigned_to}` : ""}</b>
+            <b>{esc.outcome === "rejected" ? "Closed, not solved" : "Solved"} {fmtRelative(esc.resolved_at)}{esc.assigned_to ? ` by ${esc.assigned_to}` : ""}</b>
             {esc.notes && <p>{esc.notes}</p>}
           </div>
         </div>
@@ -238,10 +263,13 @@ function CasePanel({ esc, onChange }: { esc: Escalation; onChange: () => void })
               </Button>
             )}
             <span className="cc-spacer" />
-            <Button variant="success" icon={CheckCircle2} disabled={action.busy} onClick={() => update("resolved")}>Mark resolved</Button>
+            <Button icon={XCircle} disabled={action.busy} onClick={() => update("resolved", "rejected")}
+              title="Close the case without a solution (customer declined, could not be done)">Not solved</Button>
+            <Button variant="success" icon={CheckCircle2} disabled={action.busy} onClick={() => update("resolved", "achieved")}>Solved</Button>
           </div>
           <div className="cc-notes">
-            <input placeholder="Handled by (your name)" value={owner} onChange={(e) => setOwner(e.target.value)} />
+            <input placeholder="Handled by (pick a team member or type a name)" value={owner} onChange={(e) => setOwner(e.target.value)} list={`cc-team-${esc.id}`} />
+            <datalist id={`cc-team-${esc.id}`}>{(team.data ?? []).map((m) => <option key={m.id} value={m.name} />)}</datalist>
             <textarea placeholder="Notes: what was done, who was called…" rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} />
             <div className="cc-notes-foot">
               <small>{dirty ? "Unsaved changes" : esc.notes ? "Notes saved" : "Notes are saved with the case"}</small>

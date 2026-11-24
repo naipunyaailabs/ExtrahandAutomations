@@ -166,3 +166,26 @@ def test_dashboard_counts_registrations_and_welcomes_for_both_audiences(client, 
     assert h["coverage"] == 50.0 and c["coverage"] == 50.0
     assert len(d["daily"]) == 30 and sum(x["helper_registered"] for x in d["daily"]) == 3
     assert sum(x["customer_sent"] for x in d["daily"]) == 1 and len(d["hours"]) == 24 and sum(d["hours"]) == 5
+
+
+def test_welcomed_people_stay_counted_when_extrahand_later_removes_them(client, db, fake, monkeypatch):
+    """A helper is welcomed, then ExtraHand deletes the account or marks it as a test account (it drops out of the
+    signup list). The views must still count that welcome, marked "removed", so they agree with Commercials."""
+    users, sent = fake
+    monkeypatch.setattr(welcomers, "_history_cache", {})
+    client.post("/api/whatsapp/welcomers/helper/activate")
+    users.extend([_user("keeps", "partner", -1, name="Sita Devi", phone="9000000041"),
+                  _user("goes", "partner", -1, name="User", phone="9000000042")])
+    client.post("/api/whatsapp/welcomers/check-now")
+    assert len(sent) == 2
+    users[-1]["isPaymentTester"] = True  # later marked as a test account on ExtraHand
+    users[-1]["name"] = "Test User"
+    welcomers._history_cache.clear()
+
+    people = client.get("/api/whatsapp/welcomers/helper/people").json()
+    assert people["counts"]["sent"] == 2
+    assert {p["name"]: p["removed"] for p in people["items"]} == {"Sita Devi": False, "User": True}
+    today = client.get("/api/whatsapp/welcomers/helper/history").json()["periods"]["today"]
+    assert today["welcomed"] == 2 and today["registered"] == 2
+    dash = client.get("/api/whatsapp/welcomers/dashboard").json()["audiences"]["helper"]["periods"]["today"]
+    assert dash["sent"] == 2 and dash["registered"] == 2

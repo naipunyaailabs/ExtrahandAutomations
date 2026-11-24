@@ -129,15 +129,46 @@ export interface Ticket {
 
 export interface Escalation {
   id: number;
-  ticket_id: string;
+  /** the synced task; null for a WhatsApp Support case that is not about one */
+  ticket_id: string | null;
+  /** calling (calling agent) | whatsapp (WhatsApp Support) | whatsapp_test (the in-app tester) */
+  source?: string;
+  customer_name?: string | null;
+  customer_phone?: string | null;
+  booking_id?: string | null;
+  category?: string | null;
+  conversation_id?: number | null;
   reason: string;
   details: string | null;
   status: "open" | "in_progress" | "resolved";
+  /** how a resolved case ended: achieved (solved) | rejected (closed without a solution) */
+  outcome?: "achieved" | "rejected" | null;
   assigned_to: string | null;
   notes: string | null;
   created_at: string;
   resolved_at: string | null;
   ticket: Ticket | null;
+}
+
+/** A customer care team member (cases are assigned to them by name) */
+export interface CareMember {
+  id: number;
+  name: string;
+  phone: string | null;
+  role: string | null;
+  active: boolean;
+  created_at: string | null;
+}
+
+export interface CarePeriod {
+  received: number; done: number; achieved: number; rejected: number; pending: number; achieved_rate: number | null;
+}
+
+/** Customer Care dashboard */
+export interface CareStats {
+  periods: Record<"today" | "week" | "month" | "all", CarePeriod>;
+  now: { open: number; in_progress: number; unassigned: number; oldest_waiting_since: string | null };
+  members: (CareMember & { assigned: number; working_on: number; achieved: number; rejected: number })[];
 }
 
 export interface EventItem {
@@ -441,6 +472,10 @@ export interface EngagementDashboardSummary {
     new_month: number | null;
     verified: number | null;
     aadhaar_verified: number | null;
+    pan_verified?: number | null;
+    bank_verified?: number | null;
+    /** Aadhaar, PAN and bank all verified */
+    kyc_complete?: number | null;
     with_completed_jobs: number | null;
     blocked: number | null;
     active_month: number;
@@ -1444,6 +1479,12 @@ export interface WaWelcomerPerson {
   status: WaWelcomeOutcome;
   welcomed_at: string | null;
   error: string | null;
+  /** welcomed, then deleted on ExtraHand or marked as a test account: still counted, as the message was sent and paid */
+  removed?: boolean;
+  /** why: "Deleted their account", "Marked as a test account", ... (from ExtraHand now) */
+  removed_reason?: string | null;
+  /** the name on ExtraHand now (e.g. "Account Deleted", "Test User") */
+  now_name?: string | null;
 }
 
 export interface WaWelcomerPeople {
@@ -1779,6 +1820,9 @@ export interface RegionCounts {
   helpers: number;
   new_customers: number;
   new_helpers: number;
+  /** booked a Work (customers) or were given one (helpers) in the last 30 days */
+  active_customers?: number;
+  active_helpers?: number;
 }
 
 export interface RegionState extends RegionCounts {
@@ -1790,7 +1834,10 @@ export interface RegionState extends RegionCounts {
 export interface EngagementRegions {
   loading?: boolean;
   fetched_at?: string;
-  totals?: { states: number; cities: number; customers: number; helpers: number; customers_placed: number; helpers_placed: number };
+  totals?: { states: number; cities: number; customers: number; helpers: number; customers_placed: number; helpers_placed: number;
+    active_customers?: number; active_helpers?: number };
+  active_days?: number;
+  active_known?: boolean;
   states?: RegionState[];
 }
 
@@ -2007,4 +2054,257 @@ export interface WaWelcomerDashboard {
   last_check: string | null;
   fetched_at: string | null;
   errors: string[];
+}
+
+/* ------------------------------------------------------------------ User Engagement: cancelled Works */
+
+/** Who cancelled: the customer, the ExtraHand team, or not recorded by ExtraHand (older Works). */
+export type CancelSide = "customer" | "team" | "unknown";
+
+export interface CancelledWork {
+  id: string;
+  title: string;
+  category: string;
+  customer_name: string;
+  customer_phone: string;
+  customer_key: string;
+  city: string;
+  area: string;
+  booked_at: string | null;
+  scheduled_at: string | null;
+  scheduled_slot: string;
+  /** null when ExtraHand did not record when it was cancelled */
+  cancelled_at: string | null;
+  reason: string | null;
+  side: CancelSide;
+  side_note: string;
+  helper_name: string;
+  amount: number;
+  payment_type: string;
+  refunded: boolean;
+  refunded_at: string | null;
+  /** total refunded for this Work (refunds API); null when not refunded */
+  refund_amount: number | null;
+  booking_source: string;
+}
+
+/** The numbers on the Cancelled Works cards, computed by the backend for the page's filters */
+export interface CancelledWorksSummary {
+  loading?: boolean;
+  fetched_at?: string;
+  cancelled: { count: number; value: number; rate: number | null };
+  refunded: { count: number; share: number; returned: number; paid: number };
+  not_refunded: { count: number; share: number; value: number; paid_bookings: number };
+  completed: { count: number; received: number; average: number | null };
+}
+
+export interface CancelledWorks {
+  /** real-customer Works that were completed (for the Completed / Money received cards): when, amount paid, city, service */
+  completed?: { id: string; when: string | null; amount: number; city: string; category: string }[];
+  loading?: boolean;
+  fetched_at?: string;
+  total?: number;
+  by_side?: Record<CancelSide, number>;
+  rows?: CancelledWork[];
+}
+
+/* ------------------------------------------------------------------ User Engagement: refunded Works */
+
+/** Who started the refund: the customer cancelled, an admin refunded, or the helper cancelled. */
+export type RefundStarter = "customer" | "admin" | "helper" | "unknown";
+
+export interface RefundRow {
+  id: string;
+  refund_id: string;
+  razorpay_refund_id: string;
+  payment_id: string;
+  task_id: string;
+  requested_at: string | null;
+  completed_at: string | null;
+  /** completed | processing | failed ... */
+  status: string;
+  /** razorpay = money sent back through Razorpay; recorded = written in ExtraHand only */
+  method: "razorpay" | "recorded";
+  amount: number;
+  /** what the customer paid (escrow), when known */
+  paid: number | null;
+  full: boolean;
+  fee_kept: number | null;
+  to_platform: number | null;
+  to_helper: number | null;
+  reason: string | null;
+  started_by: RefundStarter;
+  cancelled_at: string | null;
+  hours_to_refund: number | null;
+  title: string;
+  category: string;
+  work_status: string;
+  customer_name: string;
+  customer_phone: string;
+  customer_key: string;
+  city: string;
+  area: string;
+  booked_at: string | null;
+  scheduled_at: string | null;
+  scheduled_slot: string;
+  helper_name: string;
+  booking_source: string;
+}
+
+export interface RefundedWorks {
+  loading?: boolean;
+  fetched_at?: string;
+  total?: number;
+  amount?: number;
+  left_out?: { team_or_test: number; work_missing: number; not_read_yet: number };
+  work_missing_amount?: number;
+  rows?: RefundRow[];
+}
+
+/* ------------------------------------------------------------------ Customer Engagement: cancellation follow-up */
+
+export interface WaCancelFollowupRow {
+  id: number;
+  task_id: string;
+  is_test: boolean;
+  customer_name: string | null;
+  customer_phone: string | null;
+  task_title: string | null;
+  category: string | null;
+  city: string | null;
+  cancelled_at: string | null;
+  /** the reason recorded on ExtraHand when they cancelled */
+  cancel_reason: string | null;
+  /** sending | sent | failed | no_phone | skipped_repeat | answered */
+  status: string;
+  /** Meta's delivery report: sent | delivered | read | failed */
+  delivery: string | null;
+  error: string | null;
+  sent_at: string | null;
+  answered_at: string | null;
+  answer_reason: string | null;
+  answer_reason_label: string | null;
+  answer_note: string | null;
+  created_at: string | null;
+}
+
+export interface WaCancelFollowupSetup {
+  flow: { id: string | null; status: string; error?: string; validation_errors?: unknown[] };
+  template: { status: string; category?: string; language?: string; id?: string; rejected_reason?: string | null; error?: string };
+  ready: boolean;
+  /** when Meta was asked (India time shown on the page) */
+  checked_at?: string;
+}
+
+export interface WaCancelFollowupOverview {
+  active: boolean;
+  since: string | null;
+  setup: WaCancelFollowupSetup;
+  template: { name: string; body: string; footer: string; button: string };
+  form: {
+    title: string; question: string; question_te: string; select: string; select_te: string;
+    note: string; note_te: string; submit: string;
+    reasons: { id: string; en: string; te: string }[];
+  };
+  rules: { max_age_days: number; repeat_gap_days: number; check_every_seconds: number };
+  quiet_hours: { open: boolean | null; window: string | null; next_open: string | null };
+  last_check: string | null;
+  stats: WaCancelFollowupStats;
+  recent: WaCancelFollowupRow[];
+}
+
+export interface WaCancelFollowupStats {
+  sent: number; delivered: number; read: number; answered: number; waiting: number;
+  answer_rate: number | null; read_rate: number | null; with_note: number;
+  failed: number; no_phone: number; skipped_repeat: number;
+  /** test sends (Test mode), counted in the numbers above only when tests are included */
+  tests: number;
+  reasons: { id: string; label: string; count: number }[];
+}
+
+/** Message Status & Reviews: every follow-up (our records only, refreshed often) */
+export interface WaCancelFollowupMessages {
+  active: boolean;
+  since: string | null;
+  last_check: string | null;
+  stats: WaCancelFollowupStats;
+  rows: WaCancelFollowupRow[];
+  /** when Meta's webhook (delivery reports, read receipts, replies) last reached this backend */
+  webhook_last_seen: string | null;
+}
+
+/** Customer Replies: one conversation per follow-up — the form answer and anything the customer typed back */
+export interface WaCancelReplyConversation extends WaCancelFollowupRow {
+  texts: { id: number; at: string | null; text: string; kind: string }[];
+  replied: boolean;
+  last_activity: string | null;
+}
+export interface WaCancelReplies {
+  counts: { all: number; replied: number; form: number; typed: number; no_reply: number };
+  reply_window_days: number;
+  conversations: WaCancelReplyConversation[];
+  /** customers who cancelled but were not messaged: failed, no phone, already messaged this week */
+  not_sent?: WaCancelFollowupRow[];
+  /** every follow-up send with its cost (INR): Meta's pricing report when it arrived, else the category rate */
+  costs: { items: { at: string | null; cost: number; category: string; status: string; test: boolean; reported: boolean }[];
+    rates: { utility: number; marketing: number } };
+  webhook_last_seen: string | null;
+}
+
+/* ------------------------------------------------------------------ WhatsApp Support (AI customer support agent) */
+export type WsLang = "te" | "hi" | "en" | "te-latn" | "hi-latn";
+export interface WsHealth {
+  ai_configured: boolean; ai_model: string; whatsapp_configured: boolean; whatsapp_simulated: boolean;
+  signature_check: boolean; extrahand_live: boolean; webhook_last_seen: string | null;
+}
+export interface WsSettings {
+  active: boolean; test_mode: boolean; test_numbers: string[]; notify_care: boolean; health: WsHealth;
+}
+export interface WsPeriod {
+  conversations: number; customers: number; messages_in: number; ai_replies: number; team_replies: number;
+  solved_by_ai: number; handed_to_team: number; cases: number; ai_share: number | null; ai_cost_usd: number; failed_sends: number;
+}
+export interface WsCount { key: string; label: string; count: number }
+export interface WsOverview {
+  periods: Record<"today" | "week" | "month" | "all", WsPeriod>;
+  languages: WsCount[]; intents: WsCount[]; case_categories: WsCount[];
+  avg_ai_ms: number | null;
+  open_now: { with_team: number; waiting_yes: number; open_cases: number };
+  days: { day: string; messages: number; cases: number }[];
+  health: WsHealth; settings: Omit<WsSettings, "health">;
+}
+export interface WsConversation {
+  id: number; phone: string; is_test: boolean; customer_name: string | null; customer_id: string | null;
+  language: WsLang | null; language_label: string | null; mode: "ai" | "human"; status: "open" | "closed";
+  assigned_to: string | null; last_intent: string | null; last_intent_label: string | null; escalation_id: number | null;
+  waiting_yes: boolean; last_message_at: string | null; created_at: string | null;
+  last_message: { text: string; sender: string; at: string | null } | null; messages_since_reply: number;
+}
+export interface WsMessage {
+  id: number; direction: "in" | "out"; sender: "customer" | "ai" | "human" | "system"; text: string; status: string | null;
+  language: string | null; intent: string | null; intent_label: string | null; action: string | null; error: string | null;
+  author: string | null; llm_ms: number | null; llm_cost: number | null; created_at: string | null;
+}
+export interface WsBooking {
+  booking_id: string; booking_ref?: string; service?: string; category?: string; status?: string; booked_on?: string;
+  scheduled_date?: string; scheduled_time?: string; amount_rupees?: number; payment_type?: string; payment_status?: string;
+  helper_assigned?: boolean; helper_name?: string; area?: string; city?: string; cancelled_on?: string;
+  cancellation_reason?: string; refund?: { refunded: boolean; amount_rupees?: number; refunded_on?: string; note?: string };
+}
+export interface WsCaseLite {
+  id: number; category: string | null; category_label: string; status: "open" | "in_progress" | "resolved";
+  outcome: string | null; booking_id: string | null; assigned_to: string | null; created_at: string | null;
+}
+export interface WsConversationDetail extends WsConversation {
+  messages: WsMessage[]; cases: WsCaseLite[]; window_open: boolean;
+  customer: { found: boolean; customer: { name?: string; email?: string; city?: string; member_since?: string } | null;
+    bookings: WsBooking[]; total_bookings: number; as_of: string; error: string | null };
+}
+export interface WsCase extends WsCaseLite {
+  customer_name: string | null; customer_phone: string | null; details: string | null; notes: string | null;
+  conversation_id: number | null; is_test: boolean; resolved_at: string | null;
+}
+export interface WsTestReply {
+  reply?: string; language?: string; intent?: string; action?: string; case_id?: number | null; used_ai?: boolean;
+  llm_ms?: number | null; error?: string | null; skipped?: string; conversation_id?: number;
 }

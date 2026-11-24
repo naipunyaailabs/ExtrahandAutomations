@@ -97,7 +97,7 @@ export const EngagementCategoriesPage: React.FC = () => {
         marginBottom: "1rem", paddingBottom: "0.9rem", borderBottom: "1px solid var(--border)" }}>
         <div>
           <div style={{ fontSize: "11px", fontWeight: 700, color: "#4f46e5", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-            User Engagement · Customer Engagement
+            Customer Engagement · Customer Categories
           </div>
           <h1 style={{ margin: "1px 0 0", fontSize: "1.3rem", fontWeight: 800, color: "var(--text)" }}>
             Customer Engagement · {data?.month_label ?? "This month"}

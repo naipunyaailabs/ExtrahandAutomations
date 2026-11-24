@@ -4,11 +4,11 @@ Every table is defined in Python and created by Python. There is no SQL file to 
 
 | Where the tables are defined | Tables |
 |---|---|
-| `app/models.py` | core: tickets, helpers, customers, calls, follow-ups, WhatsApp, Task Seeding, settings, logs (21) |
+| `app/models.py` | core: tickets, helpers, customers, calls, follow-ups, WhatsApp (incl. cancellation follow-ups and WhatsApp Support conversations / messages), customer care team, Task Seeding, settings, logs (25) |
 | `marketing/database.py` | Advertisement: cities, festivals, posters, festival runs, AI usage (5) |
 | `pricing/tables.py` | Pricing Agent (9) |
 
-**35 tables in total.**
+**39 tables in total.**
 
 ## They are created automatically
 

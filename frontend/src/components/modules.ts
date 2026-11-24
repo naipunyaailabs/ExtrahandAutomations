@@ -17,16 +17,16 @@ export interface ModuleDef {
   match: string[];
 }
 
-/** The six modules, in home-page / dock order. One place for names, icons and colours. */
+/** The six modules, in home-page / dock order (Customer Engagement right after Calling). One place for names, icons and colours. */
 export const MODULES: ModuleDef[] = [
   { key: "calling", title: "Calling Agent", short: "Calling", subtitle: "Helper Outreach & Voice IVR", icon: PhoneCall, accent: "#2563eb",
     path: "/calling", match: ["/calling", "/calls", "/tickets", "/customer-care", "/helpers"] },
+  { key: "engagement", title: "Customer Engagement", short: "Engagement", subtitle: "Welcomers · Tiers · Cancellations", icon: BarChart3, accent: "#7c3aed",
+    path: "/engagement/dashboard", match: ["/engagement", "/reports"] },
   { key: "whatsapp", title: "WhatsApp Automation", short: "WhatsApp", subtitle: "Work Orders & Direct Chat", icon: WhatsAppIcon, accent: "#16a34a",
     path: "/whatsapp", match: ["/whatsapp"] },
   { key: "advertisement", title: "Advertisement & Campaigns", short: "Campaigns", subtitle: "State & City Event Calendars & Discounts", icon: PartyPopper,
     accent: "#d97706", path: "/advertisement", match: ["/advertisement", "/advestiment"] },
-  { key: "engagement", title: "User Engagement", short: "Engagement", subtitle: "Diamond · Gold · Silver Tiers", icon: BarChart3, accent: "#7c3aed",
-    path: "/engagement/dashboard", match: ["/engagement", "/reports"] },
   { key: "pricing", title: "Competitive Pricing", short: "Pricing", subtitle: "AI Pricing Agent & Competitor Analysis", icon: IndianRupee, accent: "#c026d3",
     path: "/pricing", match: ["/pricing"] },
   { key: "feedback", title: "Reviews & Feedback", short: "Feedback", subtitle: "Customer ratings after every completed task", icon: Star, accent: "#e11d48",

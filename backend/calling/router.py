@@ -41,4 +41,5 @@ for module in (
     commercials,
 ):
     calling_router.include_router(module.router)
+calling_router.include_router(escalations.team_router)  # Customer Care team: /api/care-team
 

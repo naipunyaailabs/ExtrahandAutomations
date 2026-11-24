@@ -16,6 +16,16 @@ import { WaWelcomerDashboard } from "./pages/WaWelcomerDashboard";
 import { ReportsPage } from "./pages/Reports";
 import { RegionsPage } from "./pages/Regions";
 import { EngagementCategoriesPage } from "./pages/EngagementCategories";
+import { CancellationDashboardPage } from "./pages/CancellationDashboard";
+import { CareDashboardPage, CareTeamPage } from "./pages/CareDashboard";
+import { SupportDashboardPage } from "./pages/SupportDashboard";
+import { SupportConversationsPage } from "./pages/SupportConversations";
+import { SupportCasesPage } from "./pages/SupportCases";
+import { SupportSettingsPage } from "./pages/SupportSettings";
+import { CancellationWorksPage } from "./pages/CancellationWorks";
+import { CancellationTemplatePage } from "./pages/CancellationTemplate";
+import { CancellationRepliesPage } from "./pages/CancellationReplies";
+import { RefundedWorksPage } from "./pages/RefundedWorks";
 import Settings from "./pages/Settings";
 import TicketDetail from "./pages/TicketDetail";
 import VoiceIvr from "./pages/VoiceIvr";
@@ -112,6 +122,21 @@ function AuthedApp() {
           <Route path="/engagement/dashboard" element={<ReportsPage />} />
           <Route path="/engagement/customers" element={<EngagementCategoriesPage />} />
           <Route path="/engagement/categories" element={<EngagementCategoriesPage />} />
+          {/* Cancellation Engagement (the old /engagement/cancelled and /engagement/cancel-followup links redirect) */}
+          <Route path="/engagement/support" element={<Navigate to="/engagement/support/dashboard" replace />} />
+          <Route path="/engagement/support/dashboard" element={<SupportDashboardPage />} />
+          <Route path="/engagement/support/conversations" element={<SupportConversationsPage />} />
+          <Route path="/engagement/support/cases" element={<SupportCasesPage />} />
+          <Route path="/engagement/support/settings" element={<SupportSettingsPage />} />
+          <Route path="/engagement/cancellation" element={<Navigate to="/engagement/cancellation/dashboard" replace />} />
+          <Route path="/engagement/cancellation/dashboard" element={<CancellationDashboardPage />} />
+          <Route path="/engagement/cancellation/works" element={<CancellationWorksPage />} />
+          <Route path="/engagement/cancellation/template" element={<CancellationTemplatePage />} />
+          <Route path="/engagement/cancellation/messages" element={<Navigate to="/engagement/cancellation/replies" replace />} />
+          <Route path="/engagement/cancellation/replies" element={<CancellationRepliesPage />} />
+          <Route path="/engagement/cancelled" element={<Navigate to="/engagement/cancellation/dashboard" replace />} />
+          <Route path="/engagement/cancel-followup" element={<Navigate to="/engagement/cancellation/template" replace />} />
+          <Route path="/engagement/refunds" element={<RefundedWorksPage />} />
           <Route path="/engagement/regions" element={<RegionsPage />} />
           <Route path="/reports" element={<ReportsPage />} />
           <Route path="/settings" element={<Settings />} />
@@ -130,6 +155,8 @@ function AuthedApp() {
           <Route path="/calling/tasks" element={<CallingPage initialView="tickets" />} />
           <Route path="/calling/helpers" element={<CallingPage initialView="helpers" />} />
           <Route path="/calling/care" element={<CallingPage initialView="care" />} />
+          <Route path="/calling/care/dashboard" element={<CareDashboardPage />} />
+          <Route path="/calling/care/team" element={<CareTeamPage />} />
           <Route path="/calling/history" element={<Calls />} />
           <Route path="/calling/voice" element={<VoiceIvr />} />
           <Route path="/calling/commercials" element={<Navigate to="/calling/commercials/automation" replace />} />
@@ -151,11 +178,17 @@ function AuthedApp() {
           <Route path="/whatsapp/replies" element={<WhatsAppPage section="send" />} />
           <Route path="/whatsapp/device" element={<WhatsAppPage section="device" />} />
           <Route path="/whatsapp/messages" element={<WaSentMessages />} />
-          <Route path="/whatsapp/welcomers" element={<Navigate to="/whatsapp/welcomers/dashboard" replace />} />
-          <Route path="/whatsapp/welcomers/dashboard" element={<WaWelcomerDashboard />} />
-          <Route path="/whatsapp/welcomers/helper" element={<WaWelcomer audience="helper" />} />
-          <Route path="/whatsapp/welcomers/customer" element={<WaWelcomer audience="customer" />} />
-          <Route path="/whatsapp/welcomers/commercials" element={<WaWelcomerCommercials />} />
+          {/* Welcomers live in Customer Engagement; the old WhatsApp addresses redirect */}
+          <Route path="/whatsapp/welcomers" element={<Navigate to="/engagement/welcomers/dashboard" replace />} />
+          <Route path="/whatsapp/welcomers/dashboard" element={<Navigate to="/engagement/welcomers/dashboard" replace />} />
+          <Route path="/whatsapp/welcomers/helper" element={<Navigate to="/engagement/welcomers/helper" replace />} />
+          <Route path="/whatsapp/welcomers/customer" element={<Navigate to="/engagement/welcomers/customer" replace />} />
+          <Route path="/whatsapp/welcomers/commercials" element={<Navigate to="/engagement/welcomers/commercials" replace />} />
+          <Route path="/engagement/welcomers" element={<Navigate to="/engagement/welcomers/dashboard" replace />} />
+          <Route path="/engagement/welcomers/dashboard" element={<WaWelcomerDashboard />} />
+          <Route path="/engagement/welcomers/helper" element={<WaWelcomer audience="helper" />} />
+          <Route path="/engagement/welcomers/customer" element={<WaWelcomer audience="customer" />} />
+          <Route path="/engagement/welcomers/commercials" element={<WaWelcomerCommercials />} />
           <Route path="/feedback/reviews" element={<WaFeedback />} />
           <Route path="/feedback/template" element={<WaFeedbackTemplate />} />
           <Route path="/feedback/replies" element={<WaFeedbackReplies />} />

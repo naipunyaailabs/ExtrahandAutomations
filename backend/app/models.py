@@ -188,14 +188,37 @@ class Escalation(Base):
     __tablename__ = "escalations"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    ticket_id: Mapped[str] = mapped_column(ForeignKey("tickets.id"), index=True)
-    reason: Mapped[str] = mapped_column(String(40))  # no_helper_accepted | no_eligible_helpers | helper_cannot_attend | customer_complaint | ...
+    # the synced task; empty for a WhatsApp Support case that is not about a booking (or one not synced here)
+    ticket_id: Mapped[str | None] = mapped_column(ForeignKey("tickets.id"), index=True, nullable=True)
+    reason: Mapped[str] = mapped_column(String(40))  # no_helper_accepted | no_eligible_helpers | helper_cannot_attend | customer_complaint | whatsapp_* ...
+    # where the case came from: calling (the calling agent) | whatsapp (WhatsApp Support agent)
+    source: Mapped[str | None] = mapped_column(String(20), default="calling")
+    customer_name: Mapped[str | None] = mapped_column(String(200))
+    customer_phone: Mapped[str | None] = mapped_column(String(32))
+    booking_id: Mapped[str | None] = mapped_column(String(64))  # ExtraHand Work id the case is about (WhatsApp)
+    category: Mapped[str | None] = mapped_column(String(40))  # cancel_request | reschedule_request | helper_issue | ...
+    conversation_id: Mapped[int | None] = mapped_column(Integer)  # WhatsApp Support conversation
     details: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(20), default="open", index=True)  # open | in_progress | resolved
+    # how a resolved case ended: achieved (customer care solved it) | rejected (closed without a solution)
+    outcome: Mapped[str | None] = mapped_column(String(12))
     assigned_to: Mapped[str | None] = mapped_column(String(120))
     notes: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class CareMember(Base):
+    """A customer care team member: cases are assigned to them by name (Escalation.assigned_to)."""
+
+    __tablename__ = "care_members"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True)
+    phone: Mapped[str | None] = mapped_column(String(32))
+    role: Mapped[str | None] = mapped_column(String(60))
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class CustomerFeedback(Base):
@@ -404,6 +427,36 @@ class WhatsAppWelcome(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
+class WhatsAppCancelFollowup(Base):
+    """One WhatsApp follow-up per Work a customer cancelled (Cancellation Follow-up): the bilingual "what went
+    wrong?" message with a form (Flow) for the reason, answered inside WhatsApp."""
+
+    __tablename__ = "whatsapp_cancel_followups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_id: Mapped[str] = mapped_column(String(64), unique=True)  # ExtraHand Work id ("test-..." for test sends)
+    is_test: Mapped[bool] = mapped_column(Boolean, default=False)
+    customer_key: Mapped[str | None] = mapped_column(String(64), index=True)
+    customer_name: Mapped[str | None] = mapped_column(String(200))
+    customer_phone: Mapped[str | None] = mapped_column(String(32), index=True)
+    task_title: Mapped[str | None] = mapped_column(String(300))
+    category: Mapped[str | None] = mapped_column(String(120))
+    city: Mapped[str | None] = mapped_column(String(120))
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime)
+    cancel_reason: Mapped[str | None] = mapped_column(String(300))  # reason recorded on ExtraHand
+    # sending | sent | failed | no_phone | skipped_repeat (messaged recently) | answered
+    status: Mapped[str] = mapped_column(String(16), default="sending", index=True)
+    flow_token: Mapped[str] = mapped_column(String(40), unique=True)
+    provider_message_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    error: Mapped[str | None] = mapped_column(String(300))
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime)
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime)
+    answer_reason: Mapped[str | None] = mapped_column(String(40))  # pricing | helper_unavailable | changed_mind | not_needed | other
+    answer_note: Mapped[str | None] = mapped_column(Text)
+    reply_raw: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
 class WhatsAppFeedbackRequest(Base):
     """One WhatsApp feedback form per completed task: sent to the customer, answered inside WhatsApp (Flow)."""
 
@@ -499,3 +552,47 @@ class SeedOptOut(Base):
     source: Mapped[str] = mapped_column(String(20), default="whatsapp")  # whatsapp | admin
     note: Mapped[str | None] = mapped_column(String(200))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class WaSupportConversation(Base):
+    """WhatsApp Support: one conversation per phone number with the AI customer support agent (or a person)."""
+
+    __tablename__ = "wa_support_conversations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    phone: Mapped[str] = mapped_column(String(32), unique=True, index=True)  # digits, with country code
+    customer_id: Mapped[str | None] = mapped_column(String(64))  # ExtraHand customer id (when the number is registered)
+    customer_name: Mapped[str | None] = mapped_column(String(200))
+    language: Mapped[str | None] = mapped_column(String(10))  # te | hi | en | te-latn | hi-latn
+    mode: Mapped[str] = mapped_column(String(10), default="ai")  # ai (the agent answers) | human (a person took over)
+    status: Mapped[str] = mapped_column(String(10), default="open", index=True)  # open | closed
+    assigned_to: Mapped[str | None] = mapped_column(String(120))
+    pending_action: Mapped[str | None] = mapped_column(Text)  # JSON: an action waiting for the customer's YES
+    last_intent: Mapped[str | None] = mapped_column(String(40))
+    escalation_id: Mapped[int | None] = mapped_column(Integer)  # the latest Customer Care case
+    is_test: Mapped[bool] = mapped_column(Boolean, default=False)  # started from the in-app tester
+    last_message_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class WaSupportMessage(Base):
+    """One message in a WhatsApp Support conversation (customer, AI, a person or the system), with the AI's log."""
+
+    __tablename__ = "wa_support_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    conversation_id: Mapped[int] = mapped_column(ForeignKey("wa_support_conversations.id"), index=True)
+    direction: Mapped[str] = mapped_column(String(4))  # in | out
+    sender: Mapped[str] = mapped_column(String(10))  # customer | ai | human | system
+    text: Mapped[str] = mapped_column(Text, default="")
+    wamid: Mapped[str | None] = mapped_column(String(128), unique=True, index=True)  # Meta message id (no double processing)
+    language: Mapped[str | None] = mapped_column(String(10))
+    intent: Mapped[str | None] = mapped_column(String(40))
+    action: Mapped[str | None] = mapped_column(String(40))  # what the agent did: create_ticket, confirm_cancel, ...
+    status: Mapped[str | None] = mapped_column(String(16))  # received | sent | failed | simulated
+    error: Mapped[str | None] = mapped_column(String(300))
+    author: Mapped[str | None] = mapped_column(String(120))  # the person who replied (sender human)
+    llm_ms: Mapped[int | None] = mapped_column(Integer)
+    llm_tokens: Mapped[int | None] = mapped_column(Integer)
+    llm_cost: Mapped[float | None] = mapped_column(Float)  # USD, as OpenRouter reports it
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)

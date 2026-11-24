@@ -20,7 +20,6 @@ import {
   XCircle,
 } from "lucide-react";
 import { api } from "../api";
-import { CallingAgentToggle } from "../components/CallingAgentToggle";
 import { useUrlState } from "../hooks";
 import { itemVariants, Stagger } from "../components/motion";
 import { Button, Pill, Tabs, useToast } from "../components/ui";
@@ -518,11 +517,6 @@ export default function BulkCallingPage() {
           <RefreshCw size={14} className={isRefreshing ? "animate-spin" : ""} /> Refresh
         </Button>
       </motion.section>
-
-      {/* GLOBAL BULK CALLING SWITCH: starts DEACTIVE, independent of Automation Calling */}
-      <motion.div variants={itemVariants}>
-        <CallingAgentToggle channel="bulk" variant="banner" onStatusChange={() => fetchCampaigns()} />
-      </motion.div>
 
       {/* Main Tabs Navigation */}
       <motion.div variants={itemVariants}>

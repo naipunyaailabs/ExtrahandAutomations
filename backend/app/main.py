@@ -31,12 +31,16 @@ async def lifespan(app: FastAPI):
         logging.getLogger("lifespan").warning("Readiness warning (non-fatal): %s", e)
     create_all_tables()  # every table (core, Advertisement, Pricing) exists before the first request
     stop = asyncio.Event()
-    task = asyncio.create_task(run_forever(stop))
-    pricing_task = asyncio.create_task(pricing_scheduler(stop))  # Pricing Agent: scheduled competitor scans
+    tasks = []
+    if get_settings().run_background_worker:
+        tasks.append(asyncio.create_task(run_forever(stop)))
+        tasks.append(asyncio.create_task(pricing_scheduler(stop)))  # Pricing Agent: scheduled competitor scans
+    else:
+        logging.getLogger("lifespan").warning("RUN_BACKGROUND_WORKER=false: API only, no automations run")
     yield
     stop.set()
-    await task
-    await pricing_task
+    for t in tasks:
+        await t
 
 
 _production = get_settings().app_env == "production"

@@ -34,6 +34,12 @@ Order outcome: `completed` = success, `cancelled` / `failed` / `expired` / `reje
 - `GET /api/engagement/categories?month=YYYY-MM` - customers of the month by orders placed: Diamond 8+, Gold 5-7,
   Platinum 1-4, Silver 0 (orders booked or scheduled in the month; default this month)
 - `GET /api/engagement/categories/silver?page=N` - Silver customers (no order in the month), 50 per page
+- `GET /api/engagement/cancellations` - every cancelled real-customer Work, newest first: who cancelled it
+  (customer / ExtraHand team / not recorded), reason, time, helper, amount, refund (`cancellations.py`)
+- `GET /api/engagement/refunds` - every refund to a real customer (ExtraHand `GET /payments/refunds`, paged with
+  `offset`), joined to its Work: amount, amount paid, fee kept, status, Razorpay id, reason, who started it and how
+  long after the cancellation (`refunds.py`). Refunds on team / test bookings or on Works ExtraHand no longer has are
+  counted separately, not shown
 - `GET /api/engagement/kpis` - operational KPIs (volume, acceptance rate, completion rate)
 - `GET /api/engagement/overview` - bookings, calls, CSAT and cost overview
 - `GET /api/engagement/export?type=bookings|calls|feedback|helpers` - CSV exports

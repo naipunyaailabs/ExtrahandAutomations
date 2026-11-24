@@ -189,7 +189,9 @@ class WhatsAppDispatchService:
                     "status": getattr(h, "status", "active") or "active",
                 })
 
-            merged.sort(key=lambda c: (c.get("distance_km") is None, c.get("distance_km") or 0))
+            from app.services.dispatch import helper_priority
+
+            merged.sort(key=helper_priority)  # Aadhaar verified first, then nearest
             return ticket, merged
         finally:
             if close_db:
@@ -200,15 +202,20 @@ class WhatsAppDispatchService:
         ticket_id: str,
         radius_km: Optional[float] = None,
         db: Optional[Session] = None,
+        helpers: Optional[list] = None,
     ) -> dict:
-        """Broadcasts task link & details via WhatsApp to ALL eligible helpers matching BOTH location AND service."""
+        """Sends the task link & details via WhatsApp to the given helpers (one wave, see waves.py), or to ALL eligible
+        helpers matching BOTH location AND service when no list is given (manual broadcast)."""
         close_db = False
         if db is None:
             db = SessionLocal()
             close_db = True
 
         try:
-            ticket, helpers = self.get_location_helpers_for_task(ticket_id, radius_km, db)
+            if helpers is None:
+                ticket, helpers = self.get_location_helpers_for_task(ticket_id, radius_km, db)
+            else:
+                ticket = db.get(Ticket, ticket_id)
             if not ticket:
                 return {
                     "ok": False,
@@ -511,29 +518,11 @@ def claim_task_alert(ticket_id: str) -> bool:
 
 
 def trigger_whatsapp_task_broadcast(ticket_id: str, radius_km: Optional[float] = None) -> None:
-    """Non-blocking background thread to broadcast a newly uploaded/synced customer task to all helpers matching location and service."""
+    """Sends the task's next WhatsApp wave if one is due (15 helpers, then 10 every hour; see waves.py)."""
     if not whatsapp_automation_active():
         logger.info("WhatsApp Automation is DEACTIVE; skipping auto broadcast for ticket %s", ticket_id)
         return
-    if not claim_task_alert(ticket_id):
-        return
-    import threading
-    def _runner():
-        import asyncio
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            wa = get_whatsapp_service()
-            res = loop.run_until_complete(wa.broadcast_task_to_location_helpers(ticket_id, radius_km=radius_km))
-            logger.info("Automatic WhatsApp task broadcast for ticket %s completed: %s", ticket_id, res.get("summary"))
-        except Exception as err:
-            logger.exception("Automatic WhatsApp task broadcast for ticket %s failed: %s", ticket_id, err)
-        finally:
-            try:
-                loop.close()
-            except Exception:
-                pass
+    from .waves import start_due_wave
 
-    t = threading.Thread(target=_runner, daemon=True)
-    t.start()
+    start_due_wave(ticket_id)
 

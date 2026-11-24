@@ -67,7 +67,6 @@ export function WhatsAppAgentView({
   // WhatsApp Channel Controls: Automation & Bulk Messaging (Active / Inactive)
   // Both channels start DEACTIVE; the real state is loaded from the server below
   const [automationActive, setAutomationActive] = useState<boolean>(false);
-  const [bulkActive, setBulkActive] = useState<boolean>(false);
   const [isTogglingChannel, setIsTogglingChannel] = useState<string | null>(null);
 
   // Active / Available Tasks
@@ -225,9 +224,6 @@ export function WhatsAppAgentView({
       if (typeof res.automation_active === "boolean") {
         setAutomationActive(res.automation_active);
       }
-      if (typeof res.bulk_active === "boolean") {
-        setBulkActive(res.bulk_active);
-      }
     } catch (e: unknown) {
       console.warn("Could not fetch WhatsApp status:", e);
     } finally {
@@ -242,7 +238,6 @@ export function WhatsAppAgentView({
       .channelControls()
       .then((controls) => {
         if (typeof controls.automation_active === "boolean") setAutomationActive(controls.automation_active);
-        if (typeof controls.bulk_active === "boolean") setBulkActive(controls.bulk_active);
       })
       .catch(() => {});
 
@@ -273,28 +268,6 @@ export function WhatsAppAgentView({
     }
   };
 
-  const handleToggleBulk = async () => {
-    const nextVal = !bulkActive;
-    setBulkActive(nextVal);
-    setIsTogglingChannel("bulk");
-    try {
-      const res = await api.whatsapp.toggleChannel({ bulk_active: nextVal });
-      if (typeof res.bulk_active === "boolean") {
-        setBulkActive(res.bulk_active);
-      }
-      toast.success(
-        nextVal ? "WhatsApp Bulk Messaging: ACTIVE" : "WhatsApp Bulk Messaging: INACTIVE",
-        nextVal
-          ? "Bulk messages and broadcasts can now be sent."
-          : "Bulk messaging is paused and cannot send messages."
-      );
-    } catch (err) {
-      setBulkActive(!nextVal);
-      toast.error("Toggle Failed", "Could not toggle WhatsApp Bulk channel.");
-    } finally {
-      setIsTogglingChannel(null);
-    }
-  };
 
 
   const handleBroadcastToLocationHelpers = async () => {
@@ -876,9 +849,6 @@ export function WhatsAppAgentView({
         <WhatsAppBulkMessaging
           status={status}
           onRefreshStatus={fetchStatus}
-          bulkActive={bulkActive}
-          onToggleBulk={handleToggleBulk}
-          isTogglingChannel={isTogglingChannel}
         />
       )}
 

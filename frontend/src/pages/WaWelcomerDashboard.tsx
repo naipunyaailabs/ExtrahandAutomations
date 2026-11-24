@@ -59,7 +59,7 @@ export function WaWelcomerDashboard() {
       <header className="wx-banner">
         <div className="wx-banner-top">
           <div className="wx-banner-title">
-            <span className="wx-kicker"><BarChart3 size={13} /> WhatsApp Agent · Welcomers</span>
+            <span className="wx-kicker"><BarChart3 size={13} /> Customer Engagement · Welcomers</span>
             <h1>Welcomer Dashboard</h1>
             <p className="wd-sub">New helper and customer registrations on ExtraHand, and the welcome messages sent to them.</p>
           </div>
@@ -76,8 +76,8 @@ export function WaWelcomerDashboard() {
         </div>
         {h && c && (
           <div className="wd-switches">
-            <Link to="/whatsapp/welcomers/helper" className={h.active ? "on" : ""}><i /> Helper Welcomer {h.active ? "on" : "off"}</Link>
-            <Link to="/whatsapp/welcomers/customer" className={c.active ? "on" : ""}><i /> Customer Welcomer {c.active ? "on" : "off"}</Link>
+            <Link to="/engagement/welcomers/helper" className={h.active ? "on" : ""}><i /> Helper Welcomer {h.active ? "on" : "off"}</Link>
+            <Link to="/engagement/welcomers/customer" className={c.active ? "on" : ""}><i /> Customer Welcomer {c.active ? "on" : "off"}</Link>
             <span className="wd-fresh" title="Registrations are read from ExtraHand every 5 minutes; welcomes are live">
               <i /> Updated {fmtRelative(r?.fetched_at)} · refreshes every minute
             </span>

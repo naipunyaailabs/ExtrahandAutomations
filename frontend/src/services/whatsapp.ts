@@ -28,6 +28,17 @@ import type {
   WaWelcomerPeople,
   WaTaskAlertTemplate,
   WaFeedbackOverview,
+  WaCancelFollowupOverview,
+  WaCancelFollowupMessages,
+  WaCancelReplies,
+  WsSettings,
+  WsOverview,
+  WsConversation,
+  WsConversationDetail,
+  WsMessage,
+  WsCase,
+  WsTestReply,
+  WaCancelFollowupSetup,
   WaFeedbackPage,
   WaFeedbackTab,
   FbTasksPage,
@@ -61,6 +72,35 @@ export function createWhatsAppService(
     activateFeedback: () => post<{ active: boolean }>("/api/whatsapp/feedback/activate"),
     deactivateFeedback: () => post<{ active: boolean }>("/api/whatsapp/feedback/deactivate"),
     feedbackCheckNow: () => post<{ sent: number }>("/api/whatsapp/feedback/check-now"),
+    /** Cancellation Follow-up: "what went wrong?" message to customers who cancel a Work (Customer Engagement) */
+    cancelFollowup: () => get<WaCancelFollowupOverview>("/api/whatsapp/cancel-followup/overview"),
+    cancelFollowupMessages: (includeTests = false) =>
+      get<WaCancelFollowupMessages>(`/api/whatsapp/cancel-followup/messages${includeTests ? "?include_tests=true" : ""}`),
+    cancelFollowupReplies: (includeTests = false) =>
+      get<WaCancelReplies>(`/api/whatsapp/cancel-followup/replies${includeTests ? "?include_tests=true" : ""}`),
+    cancelFollowupSetup: () => post<WaCancelFollowupSetup>("/api/whatsapp/cancel-followup/setup"),
+    activateCancelFollowup: () => post<{ active: boolean; since: string | null }>("/api/whatsapp/cancel-followup/activate"),
+    deactivateCancelFollowup: () => post<{ active: boolean; since: string | null }>("/api/whatsapp/cancel-followup/deactivate"),
+    cancelFollowupCheckNow: () => post<{ sent: number }>("/api/whatsapp/cancel-followup/check-now"),
+    /** WhatsApp Support: the AI customer support agent (Customer Engagement → WhatsApp Support) */
+    supportSettings: () => get<WsSettings>("/api/whatsapp/support/settings"),
+    saveSupportSettings: (body: Partial<Omit<WsSettings, "health">>) => post<WsSettings>("/api/whatsapp/support/settings", body),
+    supportOverview: (includeTests = false) => get<WsOverview>(`/api/whatsapp/support/overview${includeTests ? "?include_tests=true" : ""}`),
+    supportConversations: (p: { status?: string; mode?: string; q?: string; includeTests?: boolean } = {}) =>
+      get<WsConversation[]>(`/api/whatsapp/support/conversations?${new URLSearchParams({
+        ...(p.status ? { status: p.status } : {}), ...(p.mode ? { mode: p.mode } : {}), ...(p.q ? { q: p.q } : {}),
+        ...(p.includeTests ? { include_tests: "true" } : {}) })}`),
+    supportConversation: (id: number) => get<WsConversationDetail>(`/api/whatsapp/support/conversations/${id}`),
+    supportReply: (id: number, text: string, by?: string) => post<WsMessage>(`/api/whatsapp/support/conversations/${id}/reply`, { text, by }),
+    supportTakeover: (id: number, by?: string) => post<WsConversation>(`/api/whatsapp/support/conversations/${id}/takeover`, { by }),
+    supportHandback: (id: number) => post<WsConversation>(`/api/whatsapp/support/conversations/${id}/handback`),
+    supportClose: (id: number) => post<WsConversation>(`/api/whatsapp/support/conversations/${id}/close`),
+    supportCases: (includeTests = false) => get<WsCase[]>(`/api/whatsapp/support/cases${includeTests ? "?include_tests=true" : ""}`),
+    supportTestChat: (phone: string, text: string) => post<WsTestReply>("/api/whatsapp/support/test-chat", { phone, text }),
+    supportTestHistory: (phone: string) =>
+      get<{ conversation_id: number | null; messages: WsMessage[]; mode: string }>(`/api/whatsapp/support/test-chat?phone=${encodeURIComponent(phone)}`),
+    supportTestReset: (phone: string) => post<{ ok: boolean }>("/api/whatsapp/support/test-chat/reset", { phone, text: "" }),
+    cancelFollowupTest: (phone: string, name: string) => post<{ ok: boolean }>("/api/whatsapp/cancel-followup/test", { phone, name }),
     feedbackSendNow: (ticketId: string) => post<{ ok: boolean }>(`/api/whatsapp/feedback/send/${encodeURIComponent(ticketId)}`),
     /** Task alert template (new task -> matching helpers) as shown on the Dispatch dashboard */
     taskAlertTemplate: (ticketId?: string) =>

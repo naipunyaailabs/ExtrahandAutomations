@@ -26,12 +26,3 @@ def test_channels_toggle_independently(client):
     client.post("/api/bulk-calling/agent/deactivate")
     assert client.get("/api/calling-agent/status").json()["active"] is True
     assert client.get("/api/bulk-calling/agent/status").json()["active"] is False
-
-
-def test_whatsapp_bulk_blocked_while_deactive(client):
-    res = client.post(
-        "/api/whatsapp/send-bulk",
-        json={"recipients": [{"phone": "+919999999999", "name": "A"}], "message": "hi"},
-    )
-    assert res.status_code == 400
-    assert "INACTIVE" in res.json()["detail"]

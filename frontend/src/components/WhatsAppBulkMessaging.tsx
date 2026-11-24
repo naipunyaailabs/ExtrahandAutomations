@@ -23,7 +23,6 @@ import {
 import { api } from "../api";
 import { countryDigits, toE164, useBranding } from "../branding";
 import { useToast, WhatsAppIcon } from "./ui";
-import { ChannelActiveButton } from "./WhatsAppChannelToggle";
 import { NewTemplateDialog } from "./NewTemplateDialog";
 import { DeleteTemplateDialog } from "./DeleteTemplateDialog";
 import type {
@@ -70,9 +69,6 @@ export interface ContactEntry {
 interface WhatsAppBulkMessagingProps {
   status: WhatsAppStatus | null;
   onRefreshStatus?: () => void;
-  bulkActive?: boolean;
-  onToggleBulk?: () => void;
-  isTogglingChannel?: string | null;
 }
 
 /** A custom message in Meta's template form: {name} → {{1}}, {message}/{discount}/{task} → {{2}}, {link} → {{3}}.
@@ -90,9 +86,6 @@ function toMetaTemplateBody(text: string, globals: Record<string, string>): stri
 export function WhatsAppBulkMessaging({
   status,
   onRefreshStatus,
-  bulkActive = true,
-  onToggleBulk,
-  isTogglingChannel,
 }: WhatsAppBulkMessagingProps) {
   const toast = useToast();
 
@@ -538,13 +531,6 @@ export function WhatsAppBulkMessaging({
 
   // Dispatch Bulk Messages Trigger
   const handleSendMessages = async () => {
-    if (!bulkActive) {
-      toast.error(
-        "Bulk Messaging Inactive",
-        "WhatsApp Bulk Messaging is currently turned OFF. Toggle Bulk Msgs to Active at the top to send messages."
-      );
-      return;
-    }
     if (validContacts.length === 0) {
       toast.error("No Valid Contacts", "Please enter or upload at least one valid phone number.");
       return;
@@ -649,14 +635,6 @@ export function WhatsAppBulkMessaging({
 
         <div className="wa-section-actions">
           <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-            {/* Individual Active / Deactivated Button for Bulk Messaging */}
-            <ChannelActiveButton
-              channelName="Bulk Messaging"
-              isActive={bulkActive}
-              onToggle={onToggleBulk}
-              isLoading={isTogglingChannel === "bulk"}
-            />
-
             <span
               className="pill tone-success"
               style={{
@@ -1827,15 +1805,15 @@ export function WhatsAppBulkMessaging({
                 gap: "5px",
                 fontSize: "12px",
                 fontWeight: 600,
-                color: bulkActive ? "#15803d" : "#dc2626",
-                background: bulkActive ? "rgba(37, 211, 102, 0.1)" : "rgba(239, 68, 68, 0.1)",
-                border: bulkActive ? "1px solid rgba(37, 211, 102, 0.25)" : "1px solid rgba(239, 68, 68, 0.25)",
+                color: "#15803d",
+                background: "rgba(37, 211, 102, 0.1)",
+                border: "1px solid rgba(37, 211, 102, 0.25)",
                 borderRadius: "9999px",
                 padding: "2px 10px",
               }}
             >
-              <span className="live-dot" style={{ background: bulkActive ? "#25D366" : "#ef4444" }} />
-              <span>{bulkActive ? "Cloud Gateway Active" : "Bulk Channel Deactivated"}</span>
+              <span className="live-dot" style={{ background: "#25D366" }} />
+              <span>Cloud Gateway Ready</span>
             </span>
 
             <span className="badge" style={{ fontSize: "11px" }}>
@@ -1877,57 +1855,11 @@ export function WhatsAppBulkMessaging({
 
           <span className="muted">·</span>
 
-          <span style={{ display: "inline-flex", alignItems: "center", gap: "5px", color: bulkActive ? "#15803d" : "#dc2626" }}>
-            <span className="live-dot" style={{ background: bulkActive ? "#25D366" : "#ef4444" }} />
-            <span>{bulkActive ? "Ready for WhatsApp Cloud dispatch" : "Sending currently paused"}</span>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: "5px", color: "#15803d" }}>
+            <span className="live-dot" style={{ background: "#25D366" }} />
+            <span>Ready for WhatsApp Cloud dispatch</span>
           </span>
         </div>
-
-        {/* Warning banner when Bulk Messaging is Deactivated */}
-        {!bulkActive && (
-          <div
-            style={{
-              marginBottom: "1rem",
-              padding: "9px 14px",
-              borderRadius: "8px",
-              background: "rgba(239, 68, 68, 0.08)",
-              border: "1.5px solid rgba(239, 68, 68, 0.35)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              flexWrap: "wrap",
-              gap: "8px",
-              fontSize: "12.5px",
-              color: "#991b1b",
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <AlertCircle size={16} style={{ color: "#ef4444", flexShrink: 0 }} />
-              <span>
-                <strong>Bulk Messaging is DEACTIVATED:</strong> Messages cannot be sent right now. Click the red <strong>Deactivated</strong> button at top right to activate.
-              </span>
-            </div>
-            {onToggleBulk && (
-              <button
-                type="button"
-                className="btn btn-sm"
-                onClick={onToggleBulk}
-                style={{
-                  fontSize: "11.5px",
-                  padding: "3px 10px",
-                  background: "#ef4444",
-                  color: "#ffffff",
-                  border: "none",
-                  borderRadius: "6px",
-                  fontWeight: 700,
-                  cursor: "pointer",
-                }}
-              >
-                Turn On Bulk
-              </button>
-            )}
-          </div>
-        )}
 
         {/* Progress bar during sending */}
         {isDispatching && (
@@ -1953,32 +1885,30 @@ export function WhatsAppBulkMessaging({
         <button
           type="button"
           className="btn btn-primary btn-lg"
-          disabled={isDispatching || validContacts.length === 0 || !messageText.trim() || !bulkActive}
+          disabled={isDispatching || validContacts.length === 0 || !messageText.trim()}
           onClick={handleSendMessages}
           style={{
             width: "100%",
             height: "48px",
             fontSize: "15px",
             fontWeight: 700,
-            background: bulkActive ? "#25D366" : "#f87171",
-            borderColor: bulkActive ? "#25D366" : "#f87171",
+            background: "#25D366",
+            borderColor: "#25D366",
             color: "#ffffff",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             gap: "10px",
-            boxShadow: bulkActive ? "0 4px 14px rgba(37, 211, 102, 0.35)" : "none",
+            boxShadow: "0 4px 14px rgba(37, 211, 102, 0.35)",
             cursor:
-              isDispatching || validContacts.length === 0 || !messageText.trim() || !bulkActive
+              isDispatching || validContacts.length === 0 || !messageText.trim()
                 ? "not-allowed"
                 : "pointer",
           }}
         >
           <WhatsAppIcon size={20} />
           <span>
-            {!bulkActive
-              ? `🚫 Cannot Send: Bulk Messaging is Deactivated (Click Active button at top right)`
-              : isDispatching
+            {isDispatching
               ? `Broadcasting to ${validContacts.length} Contacts...`
               : `Send Messages to (${validContacts.length}) Recipients`}
           </span>

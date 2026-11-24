@@ -219,7 +219,14 @@ function People({ audience, day, setDay, anchor }: {
                 <li key={p.user_id} className="wwl-person">
                   <span className={`wwl-avatar wwl-t-${o.tone}`}>{initials(p.name)}</span>
                   <div className="wwl-person-main">
-                    <b>{p.name || "Unnamed"}</b>
+                    <b>{p.name || "Unnamed"}{p.removed && (
+                      <span className="wwl-removed" title="Welcomed right after signing up; this changed on ExtraHand afterwards. Still counted: the message was sent and paid for.">
+                        {p.removed_reason ?? "Removed later"}
+                      </span>
+                    )}</b>
+                    {p.removed && p.now_name && p.now_name !== p.name && (
+                      <span className="wwl-person-meta">Now on ExtraHand as “{p.now_name}”</span>
+                    )}
                     <span className="wwl-person-meta">
                       <Phone size={12} /> <span className="tabular">{phone(p.phone)}</span>
                       {p.city && <> · {p.city}</>}
@@ -344,7 +351,7 @@ export function WaWelcomer({ audience }: { audience: WaAudience }) {
       <header className="wx-banner">
         <div className="wx-banner-top">
           <div className="wx-banner-title">
-            <span className="wx-kicker"><Icon size={13} /> WhatsApp Agent · Welcomers</span>
+            <span className="wx-kicker"><Icon size={13} /> Customer Engagement · Welcomers</span>
             <h1>{c.title}</h1>
             <p className="wwl-sub">
               Every new {c.who} who registers on ExtraHand automatically gets the{" "}
@@ -582,7 +589,7 @@ export function WaWelcomerCommercials() {
       <header className="wx-banner">
         <div className="wx-banner-top">
           <div className="wx-banner-title">
-            <span className="wx-kicker"><Receipt size={13} /> WhatsApp Agent · Welcomers</span>
+            <span className="wx-kicker"><Receipt size={13} /> Customer Engagement · Welcomers</span>
             <h1>Welcomer Commercials</h1>
             <p className="wwl-sub">Usage and Meta charges of the Helper and Customer welcome messages only.</p>
           </div>

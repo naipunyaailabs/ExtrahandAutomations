@@ -6,7 +6,7 @@ from datetime import timedelta
 
 from ..config import get_settings
 from ..database import SessionLocal
-from ..models import CallAttempt, DispatchRun, DispatchStatus, Event, Ticket, utcnow
+from ..models import CallAttempt, DispatchRun, DispatchStatus, Ticket, utcnow
 from . import ivr, tts_audio
 from .common import call_window, runtime_settings
 from .dispatch import DispatchError, get_provider_safe, start_dispatch
@@ -56,21 +56,10 @@ def auto_dispatch(db) -> int:
             start_dispatch(db, t.id, trigger="auto")
             started += 1
             if r.workflow_whatsapp_dispatch_enabled and r.whatsapp_automation_active:
-                from whatsapp.service import claim_task_alert
-
-                if not claim_task_alert(t.id):
-                    continue
                 try:
-                    from whatsapp.service import get_whatsapp_service
-                    wa = get_whatsapp_service()
-                    try:
-                        loop = asyncio.get_event_loop()
-                        if loop.is_running():
-                            asyncio.create_task(wa.broadcast_task_to_location_helpers(t.id, db=db))
-                        else:
-                            loop.run_until_complete(wa.broadcast_task_to_location_helpers(t.id, db=db))
-                    except RuntimeError:
-                        asyncio.run(wa.broadcast_task_to_location_helpers(t.id, db=db))
+                    from whatsapp.waves import start_due_wave
+
+                    start_due_wave(t.id)  # first WhatsApp wave (15 helpers) if not sent yet
                 except Exception as wa_err:
                     log.warning("WhatsApp auto-broadcast failed for %s: %s", t.id, wa_err)
         except DispatchError as e:
@@ -79,7 +68,8 @@ def auto_dispatch(db) -> int:
 
 
 def auto_broadcast_whatsapp_tickets(db) -> int:
-    """Broadcasts newly uploaded/synced tickets to helpers matching location and service via WhatsApp."""
+    """WhatsApp task alerts in waves: 15 matching helpers first, then 10 more every hour while nobody is assigned,
+    never after the task's time (whatsapp/waves.py). Returns how many waves started."""
     s = get_settings()
     # STRICT SAFETY GUARD: Do not auto-broadcast if simulated or if auto-dispatch is disabled
     if getattr(s, "whatsapp_simulated", True):
@@ -88,30 +78,13 @@ def auto_broadcast_whatsapp_tickets(db) -> int:
     if not r.auto_dispatch or not r.workflow_helper_dispatch_enabled or not r.whatsapp_automation_active:
         return 0
 
-    now = utcnow()
-    tickets = (
-        db.query(Ticket)
-        .filter(
-            Ticket.dispatch_status == DispatchStatus.NEW,
-            Ticket.assignee_id.is_(None),
-        )
-        .all()
-    )
-    count = 0
     try:
-        from whatsapp.service import trigger_whatsapp_task_broadcast
-        for t in tickets:
-            target_dt = t.scheduled_at or t.created_at
-            # Compare based on dates: only dispatch tasks scheduled for Today or Upcoming (skip past/expired)
-            if not target_dt or target_dt < now - timedelta(hours=2):
-                continue
-            already = db.query(Event).filter(Event.ticket_id == t.id, Event.kind == "whatsapp_location_broadcast").first()
-            if not already:
-                trigger_whatsapp_task_broadcast(t.id)
-                count += 1
-    except Exception as e:
+        from whatsapp.waves import run_waves
+
+        return run_waves(db)
+    except Exception as e:  # noqa: BLE001
         log.warning("auto_broadcast_whatsapp_tickets check failed: %s", e)
-    return count
+        return 0
 
 
 def sweep_ivr_audio(db) -> int:
@@ -165,6 +138,13 @@ def tick() -> None:
         except Exception:  # noqa: BLE001
             db.rollback()
             log.exception("feedback step failed")
+        try:
+            from whatsapp.cancel_followup import run_cancel_followup
+
+            run_cancel_followup(db)  # "what went wrong?" message to customers who cancel a Work (off by default)
+        except Exception:  # noqa: BLE001
+            db.rollback()
+            log.exception("cancellation follow-up step failed")
 
         r = runtime_settings(db)
         if r.emergency_stop_calls or not r.calling_agent_active:

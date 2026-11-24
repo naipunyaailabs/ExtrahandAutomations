@@ -1,5 +1,6 @@
 import hmac
 import io
+import json
 import logging
 import re
 from typing import Any, Dict, List, Optional
@@ -203,12 +204,22 @@ async def verify_meta_webhook(request: Request):
 @router.post("/webhook")
 async def receive_meta_webhook(request: Request):
     """Handles incoming WhatsApp messages and delivery receipts from Meta Cloud API."""
+    from .support.webhook import handle_webhook as _support_webhook
+    from .support.webhook import signature_ok
+
+    raw = await request.body()
+    if not signature_ok(raw, request.headers.get("X-Hub-Signature-256")):
+        # Meta signs every call with the app secret (META_APP_SECRET): anything else is not from Meta
+        logger.warning("[Meta Webhook] Refused a call with a missing or wrong signature")
+        raise HTTPException(status_code=403, detail="Invalid signature")
     try:
-        data = await request.json()
+        data = json.loads(raw or b"{}")
         logger.info("[Meta Inbound Webhook Received] %s", data)
         apply_webhook(data)  # delivery / read / failure / pricing reports and inbound messages, for the commercials pages
+        from .cancel_followup import apply_cancel_followup_webhook
         from .feedback import apply_feedback_webhook
 
+        apply_cancel_followup_webhook(data)  # answers to the cancellation reason form (Cancellation Follow-up)
         apply_feedback_webhook(data)  # answers to the customer feedback form (Reviews & Feedback)
         # Parse incoming message if available
         entry = data.get("entry", [{}])[0]
@@ -223,6 +234,10 @@ async def receive_meta_webhook(request: Request):
             from marketing.task_seeding import handle_inbound_text
 
             handle_inbound_text(from_phone, body)  # STOP: no more Task-Seeding messages or calls
+        try:
+            _support_webhook(data)  # WhatsApp Support: the AI customer support agent (whatsapp/support/)
+        except Exception:  # noqa: BLE001 - never let the agent break the other flows
+            logger.exception("[WhatsApp Support] webhook handling failed")
         return {"status": "ok"}
     except Exception as e:
         logger.exception("[Meta Webhook Error] %s", e)
@@ -718,11 +733,6 @@ async def send_bulk_whatsapp_messages(payload: BulkMessageRequest):
     Dispatches bulk WhatsApp messages to a list of recipients with
     custom dynamic tag variable interpolation and delivery tracking.
     """
-    if not _channel_active("bulk_active"):
-        raise HTTPException(
-            status_code=400,
-            detail="WhatsApp Bulk Messaging is currently INACTIVE. Turn on Bulk Msgs at the top to send messages.",
-        )
     from app.database import SessionLocal
     from app.models import Event
 
@@ -895,6 +905,13 @@ from .task_alert import router as _task_alert_router  # noqa: E402
 router.include_router(_task_alert_router)
 
 # Reviews & Feedback: WhatsApp feedback form after a task is completed: /api/whatsapp/feedback/...
+from .cancel_followup import router as _cancel_followup_router  # noqa: E402
 from .feedback import router as _feedback_router  # noqa: E402
 
 router.include_router(_feedback_router)
+router.include_router(_cancel_followup_router)  # /api/whatsapp/cancel-followup
+
+# WhatsApp Support: the AI customer support agent: /api/whatsapp/support/...
+from .support.router import router as _support_router  # noqa: E402
+
+router.include_router(_support_router)

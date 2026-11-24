@@ -392,7 +392,9 @@ def normalize_user(u: dict) -> dict:
     else:
         is_act = bool(is_act)
 
+    # is_verified = Aadhaar verified on ExtraHand (isVerified is a fallback for records without the Aadhaar field)
     is_ver = bool(pick(u, "isAadhaarVerified", "isVerified", "partnerProfile.isVerified") or False)
+    verified_known = any(dig(u, p) is not None for p in ("isAadhaarVerified", "isVerified", "partnerProfile.isVerified"))
     can_acc = pick(u, "roleVerifications.tasker.canAcceptTasks", "canAcceptTasks")
     can_acc = True if can_acc is None else bool(can_acc)
     user_addr = pick_str(u, "location.address", "address.fullAddress", "address.line1", "location.addressDetails.area") or _address(u)
@@ -422,6 +424,7 @@ def normalize_user(u: dict) -> dict:
         "status": pick_str(u, "partnerProfile.status", "status") or "active",
         "is_active": is_act,
         "is_verified": is_ver,
+        "verified_known": verified_known,  # False: the record had no verification field (do not overwrite it)
         "can_accept_tasks": can_acc,
         "work_shift_type": pick_str(u, "partnerProfile.workShiftType", "workShiftType"),
         "distance_km": to_float(pick(u, "distanceKm", "distance", "dist.calculated")),

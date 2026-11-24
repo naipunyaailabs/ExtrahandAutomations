@@ -14,7 +14,6 @@ Workflow:
 import asyncio
 import logging
 import math
-import threading
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -97,10 +96,13 @@ class WhatsAppTaskDispatchAgent:
                 "city": h.city or "Local",
                 "skills": h.skills or [],
                 "is_verified": bool(h.is_verified),
+                "aadhaar_verified": bool(h.is_verified),
             })
 
-        # Sort closest helpers first
-        eligible.sort(key=lambda x: (x["distance_km"] is None, x["distance_km"] or 999.0))
+        # Aadhaar-verified helpers first, then the rest; nearest first within each group (same order as calls)
+        from app.services.dispatch import helper_priority
+
+        eligible.sort(key=helper_priority)
         return eligible
 
     def compose_notification_message(self, ticket: Ticket, partner: Dict[str, Any]) -> str:
@@ -253,29 +255,15 @@ class WhatsAppTaskDispatchAgent:
                 db.close()
 
     def dispatch_for_task(self, ticket_id: str, radius_km: Optional[float] = None) -> None:
-        """Non-blocking background launcher called whenever a customer creates/uploads a task."""
-        from .service import claim_task_alert, whatsapp_automation_active
+        """Called whenever a customer creates/uploads a task: sends its first WhatsApp wave (15 helpers; the next
+        waves of 10 follow hourly from the worker until someone is assigned - see waves.py)."""
+        from .service import whatsapp_automation_active
+        from .waves import start_due_wave
 
         if not whatsapp_automation_active():
             logger.info("WhatsApp Automation is DEACTIVE; not dispatching ticket %s", ticket_id)
             return
-        if not claim_task_alert(ticket_id):
-            return  # already alerted by another path (or the task time has passed)
-        def _run():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(self.broadcast_task_async(ticket_id, radius_km=radius_km))
-            except Exception as e:
-                logger.exception("Error executing WhatsApp Dispatch Agent for ticket %s: %s", ticket_id, e)
-            finally:
-                try:
-                    loop.close()
-                except Exception:
-                    pass
-
-        t = threading.Thread(target=_run, daemon=True, name=f"wa-dispatch-{ticket_id[:8]}")
-        t.start()
+        start_due_wave(ticket_id)
 
 
 _agent: Optional[WhatsAppTaskDispatchAgent] = None

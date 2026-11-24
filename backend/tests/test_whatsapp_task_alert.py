@@ -103,7 +103,11 @@ def test_auto_paths_respect_the_claim(db, monkeypatch):
     started = []
     monkeypatch.setattr(service.threading if hasattr(service, "threading") else __import__("threading"), "Thread",
                         lambda target=None, **kw: type("T", (), {"start": lambda self: started.append(target)})())
-    make_ticket(db, id="task_x", scheduled_at=utcnow() + timedelta(hours=3))
+    # an open task (nobody assigned yet): only then are helpers alerted
+    make_ticket(db, id="task_x", scheduled_at=utcnow() + timedelta(hours=3), assignee_id=None, assignee_name=None,
+                assignee_phone=None)
+    db.add(__import__("app.models", fromlist=["Helper"]).Helper(
+        id="helperx" * 4, name="Ravi Kumar", phone="+919000000071", city="Hyderabad", skills=["cleaning"], categories=["cleaning"]))
     db.commit()
 
     get_whatsapp_dispatch_agent().dispatch_for_task("task_x")  # sync / upload path

@@ -11,6 +11,8 @@ import type {
   CallDetail,
   CustomerFeedback,
   Escalation,
+  CareMember,
+  CareStats,
   EventItem,
   Helper,
   HelperDetail,
@@ -88,8 +90,15 @@ export function createCallingService(
       post<{ call: Call; spoken: string | null; max_prompts: number }>(`/api/simulator/calls/${callId}`, { action, digit, result }),
     escalations: (status?: string) =>
       get<Escalation[]>(`/api/escalations${status ? `?status=${encodeURIComponent(status)}` : ""}`),
-    updateEscalation: (id: number, body: { status?: string; resolution_notes?: string; notes?: string; assigned_to?: string }) =>
+    updateEscalation: (id: number, body: { status?: string; outcome?: "achieved" | "rejected"; resolution_notes?: string; notes?: string; assigned_to?: string }) =>
       request<Escalation>("PATCH", `/api/escalations/${id}`, body, serviceUrl),
+    /** Customer Care dashboard: cases per period (received / done / achieved / rejected / pending) and the team */
+    careStats: () => get<CareStats>("/api/escalations/stats"),
+    careTeam: () => get<CareMember[]>("/api/care-team"),
+    addCareMember: (body: { name: string; phone?: string; role?: string }) => post<CareMember>("/api/care-team", body),
+    updateCareMember: (id: number, body: { name: string; phone?: string; role?: string }) =>
+      request<CareMember>("PATCH", `/api/care-team/${id}`, body, serviceUrl),
+    removeCareMember: (id: number) => request<{ ok: boolean }>("DELETE", `/api/care-team/${id}`, undefined, serviceUrl),
     redispatch: (id: number) => post(`/api/escalations/${id}/redispatch`),
     events: (limit = 30) => get<EventItem[]>(`/api/events?limit=${limit}`),
     helpers: (params?: { q?: string; service?: string; location?: string; status?: string; is_verified?: boolean; can_accept_tasks?: boolean }) => {

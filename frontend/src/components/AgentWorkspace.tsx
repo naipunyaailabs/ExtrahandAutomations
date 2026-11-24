@@ -2,7 +2,6 @@ import { AnimatePresence, LayoutGroup, motion } from "framer-motion";
 import {
   ArrowLeft,
   AudioLines,
-  Award,
   History,
   LayoutDashboard,
   LifeBuoy,
@@ -17,6 +16,7 @@ import {
   FileText,
   ClipboardList,
   MessageSquareQuote,
+  MessagesSquare,
   ListChecks,
   Braces,
   Send,
@@ -25,9 +25,13 @@ import {
   Inbox,
   HandHeart,
   UserRoundPlus,
+  UserX,
+  RotateCcw,
+  MessageCircleHeart,
   Star,
   Ticket,
   Users,
+  UsersRound,
   Workflow,
   Receipt,
   ReceiptIndianRupee,
@@ -93,7 +97,14 @@ const AGENTS: Record<AgentKind, { title: string; subtitle: string; icon: LucideI
         items: [
           { to: "/calling/tasks", label: "Tickets & Tasks", icon: Ticket, match: ["/tickets"] },
           { to: "/calling/helpers", label: "Helper Details", icon: Users, match: ["/helpers"] },
-          { to: "/calling/care", label: "Customer Care", icon: LifeBuoy, match: ["/customer-care"], badge: (s) => s.open_escalations, danger: true },
+        ],
+      },
+      {
+        title: "Customer Care",
+        items: [
+          { to: "/calling/care/dashboard", label: "Care Dashboard", icon: LayoutDashboard },
+          { to: "/calling/care/team", label: "Care Team", icon: UsersRound },
+          { to: "/calling/care", label: "Customer Care Cases", icon: LifeBuoy, match: ["/customer-care"], badge: (s) => s.open_escalations, danger: true },
         ],
       },
     ],
@@ -129,15 +140,6 @@ const AGENTS: Record<AgentKind, { title: string; subtitle: string; icon: LucideI
             match: ["/whatsapp/bulk-msgs"],
           },
           { to: "/whatsapp/commercials/bulk", label: "Bulk Commercials", icon: Megaphone },
-        ],
-      },
-      {
-        title: "Welcomers",
-        items: [
-          { to: "/whatsapp/welcomers/dashboard", label: "Welcomer Dashboard", icon: LayoutDashboard },
-          { to: "/whatsapp/welcomers/helper", label: "Helper Welcomer", icon: HandHeart },
-          { to: "/whatsapp/welcomers/customer", label: "Customer Welcomer", icon: UserRoundPlus },
-          { to: "/whatsapp/welcomers/commercials", label: "Welcomer Commercials", icon: Receipt },
         ],
       },
 
@@ -189,16 +191,42 @@ const AGENTS: Record<AgentKind, { title: string; subtitle: string; icon: LucideI
     ],
   },
   reports: {
-    title: "User Engagement",
-    subtitle: "Customer Engagement",
+    title: "Customer Engagement",
+    subtitle: "Welcomers, customers & cancellations",
     icon: Users,
     groups: [
       {
         title: "Overview",
         items: [
           { to: "/engagement/dashboard", label: "Dashboard", icon: LayoutDashboard, match: ["/engagement/dashboard", "/reports"] },
-          { to: "/engagement/customers", label: "Customer Engagement", icon: Award, match: ["/engagement/customers", "/engagement/categories"] },
-          { to: "/engagement/regions", label: "Regions", icon: MapPin },
+        ],
+      },
+      {
+        title: "Welcomers",
+        items: [
+          { to: "/engagement/welcomers/dashboard", label: "Welcomer Dashboard", icon: LayoutDashboard, match: ["/whatsapp/welcomers/dashboard"] },
+          { to: "/engagement/welcomers/helper", label: "Helper Welcomer", icon: HandHeart, match: ["/whatsapp/welcomers/helper"] },
+          { to: "/engagement/welcomers/customer", label: "Customer Welcomer", icon: UserRoundPlus, match: ["/whatsapp/welcomers/customer"] },
+          { to: "/engagement/welcomers/commercials", label: "Welcomer Commercials", icon: Receipt, match: ["/whatsapp/welcomers/commercials"] },
+        ],
+      },
+      {
+        title: "WhatsApp Support",
+        items: [
+          { to: "/engagement/support/dashboard", label: "Dashboard", icon: LayoutDashboard },
+          { to: "/engagement/support/conversations", label: "Conversations", icon: MessagesSquare },
+          { to: "/engagement/support/cases", label: "Support Cases", icon: LifeBuoy },
+          { to: "/engagement/support/settings", label: "Settings & Test", icon: SlidersHorizontal },
+        ],
+      },
+      {
+        title: "Cancellation Engagement",
+        items: [
+          { to: "/engagement/cancellation/dashboard", label: "Dashboard", icon: LayoutDashboard, match: ["/engagement/cancelled"] },
+          { to: "/engagement/cancellation/works", label: "Works", icon: UserX },
+          { to: "/engagement/refunds", label: "Refunds", icon: RotateCcw },
+          { to: "/engagement/cancellation/template", label: "Template", icon: MessageCircleHeart, match: ["/engagement/cancel-followup"] },
+          { to: "/engagement/cancellation/replies", label: "Messages & Replies", icon: MessagesSquare, match: ["/engagement/cancellation/messages"] },
         ],
       },
     ],
@@ -417,10 +445,7 @@ export function AgentWorkspace({ agent, children }: { agent: AgentKind; children
           </div>
           <div className="topbar-actions" style={{ display: "flex", alignItems: "center", gap: "10px" }}>
             {agent === "calling" && (
-              <>
-                <CallingAgentToggle channel="automation" variant="bar" />
-                <CallingAgentToggle channel="bulk" variant="bar" />
-              </>
+              <CallingAgentToggle channel="automation" variant="bar" />
             )}
             <ThemeButton />
             <UserChip />

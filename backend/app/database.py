@@ -63,6 +63,32 @@ class Base(DeclarativeBase):
     pass
 
 
+def _pg_add_column(conn, table: str, column: str, col_type: str) -> None:
+    """PostgreSQL: adds the column only when it is missing. "ADD COLUMN IF NOT EXISTS" takes an exclusive lock on the
+    table even when the column exists, so a start would queue behind any open transaction (and every query of the
+    live server would queue behind the start). A missing column is added with a short lock timeout: when the table
+    is busy the start goes on and the column is added on a later start."""
+    from sqlalchemy import text
+
+    exists = conn.execute(text("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() "
+                               "AND table_name = :t AND column_name = :c"), {"t": table, "c": column}).first()
+    if exists:
+        return
+    _pg_locked(conn, f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {col_type}")
+
+
+def _pg_locked(conn, sql: str) -> None:
+    """Runs one schema change with a 5-second lock timeout (in a savepoint, so a timeout does not undo the others)."""
+    import logging
+
+    try:
+        with conn.begin_nested():
+            conn.exec_driver_sql("SET LOCAL lock_timeout = '5s'")
+            conn.exec_driver_sql(sql)
+    except Exception as exc:  # noqa: BLE001 - busy table: try again on the next start
+        logging.getLogger("database").warning("Schema change skipped for now (%s): %s", sql, str(exc).splitlines()[0])
+
+
 def _migrate_helpers_table() -> None:
     new_cols = [
         ("email", "VARCHAR(200)"),
@@ -87,7 +113,7 @@ def _migrate_helpers_table() -> None:
                     conn.exec_driver_sql(f"ALTER TABLE helpers ADD COLUMN {col_name} {col_type}")
         else:
             for col_name, col_type in new_cols:
-                conn.exec_driver_sql(f"ALTER TABLE helpers ADD COLUMN IF NOT EXISTS {col_name} {col_type}")
+                _pg_add_column(conn, "helpers", col_name, col_type)
         conn.commit()
 
 
@@ -113,7 +139,7 @@ def _migrate_call_attempts_table() -> None:
                     conn.exec_driver_sql(f"ALTER TABLE call_attempts ADD COLUMN {col_name} {col_type}")
         else:
             for col_name, col_type in new_cols:
-                conn.exec_driver_sql(f"ALTER TABLE call_attempts ADD COLUMN IF NOT EXISTS {col_name} {col_type}")
+                _pg_add_column(conn, "call_attempts", col_name, col_type)
         conn.commit()
 
 
@@ -129,7 +155,7 @@ def _migrate_followups_table() -> None:
                     conn.exec_driver_sql(f"ALTER TABLE followups ADD COLUMN {col_name} {col_type}")
         else:
             for col_name, col_type in new_cols:
-                conn.exec_driver_sql(f"ALTER TABLE followups ADD COLUMN IF NOT EXISTS {col_name} {col_type}")
+                _pg_add_column(conn, "followups", col_name, col_type)
         conn.commit()
 
 
@@ -145,7 +171,7 @@ def _migrate_whatsapp_messages_table() -> None:
                     conn.exec_driver_sql(f"ALTER TABLE whatsapp_messages ADD COLUMN {col_name} {col_type}")
         else:
             for col_name, col_type in new_cols:
-                conn.exec_driver_sql(f"ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS {col_name} {col_type}")
+                _pg_add_column(conn, "whatsapp_messages", col_name, col_type)
         conn.commit()
 
 
@@ -161,7 +187,7 @@ def _migrate_whatsapp_feedback_table() -> None:
                     conn.exec_driver_sql(f"ALTER TABLE whatsapp_feedback ADD COLUMN {col_name} {col_type}")
         else:
             for col_name, col_type in new_cols:
-                conn.exec_driver_sql(f"ALTER TABLE whatsapp_feedback ADD COLUMN IF NOT EXISTS {col_name} {col_type}")
+                _pg_add_column(conn, "whatsapp_feedback", col_name, col_type)
         conn.commit()
 
 
@@ -178,7 +204,7 @@ def _migrate_tickets_table() -> None:
                     conn.exec_driver_sql(f"ALTER TABLE tickets ADD COLUMN {col_name} {col_type}")
         else:
             for col_name, col_type in new_cols:
-                conn.exec_driver_sql(f"ALTER TABLE tickets ADD COLUMN IF NOT EXISTS {col_name} {col_type}")
+                _pg_add_column(conn, "tickets", col_name, col_type)
         conn.commit()
 
 
@@ -189,8 +215,54 @@ def _migrate_task_seed_table() -> None:
             if cols and "services" not in cols:
                 conn.exec_driver_sql("ALTER TABLE task_seed_contacts ADD COLUMN services VARCHAR(200)")
         else:
-            conn.exec_driver_sql("ALTER TABLE task_seed_contacts ADD COLUMN IF NOT EXISTS services VARCHAR(200)")
+            _pg_add_column(conn, "task_seed_contacts", "services", "VARCHAR(200)")
         conn.commit()
+
+
+def _migrate_escalations_table() -> None:
+    new_cols = [("outcome", "VARCHAR(12)"), ("source", "VARCHAR(20)"), ("customer_name", "VARCHAR(200)"),
+                ("customer_phone", "VARCHAR(32)"), ("booking_id", "VARCHAR(64)"), ("category", "VARCHAR(40)"),
+                ("conversation_id", "INTEGER")]
+    with engine.connect() as conn:
+        if is_sqlite:
+            info = conn.exec_driver_sql("PRAGMA table_info(escalations)").fetchall()
+            cols = {row[1] for row in info}
+            if not cols:
+                return
+            for col_name, col_type in new_cols:
+                if col_name not in cols:
+                    conn.exec_driver_sql(f"ALTER TABLE escalations ADD COLUMN {col_name} {col_type}")
+            # a WhatsApp Support case may have no task: SQLite cannot drop NOT NULL, so the table is rebuilt once
+            if any(row[1] == "ticket_id" and row[3] for row in info):
+                conn.commit()
+                _rebuild_sqlite_escalations(conn)
+        else:
+            for col_name, col_type in new_cols:
+                _pg_add_column(conn, "escalations", col_name, col_type)
+            from sqlalchemy import text
+
+            nullable = conn.execute(text("SELECT is_nullable FROM information_schema.columns WHERE table_schema = "
+                                         "current_schema() AND table_name = 'escalations' AND column_name = 'ticket_id'")).scalar()
+            if nullable == "NO":
+                _pg_locked(conn, "ALTER TABLE escalations ALTER COLUMN ticket_id DROP NOT NULL")
+        conn.commit()
+
+
+def _rebuild_sqlite_escalations(conn) -> None:
+    from .models import Escalation
+
+    cols = [row[1] for row in conn.exec_driver_sql("PRAGMA table_info(escalations)").fetchall()]
+    keep = [c.name for c in Escalation.__table__.columns if c.name in cols]
+    names = ", ".join(keep)
+    conn.exec_driver_sql("PRAGMA foreign_keys=OFF")
+    conn.exec_driver_sql("ALTER TABLE escalations RENAME TO escalations_old")
+    for ix in Escalation.__table__.indexes:
+        conn.exec_driver_sql(f"DROP INDEX IF EXISTS {ix.name}")
+    Escalation.__table__.create(conn)
+    conn.exec_driver_sql(f"INSERT INTO escalations ({names}) SELECT {names} FROM escalations_old")
+    conn.exec_driver_sql("DROP TABLE escalations_old")
+    conn.exec_driver_sql("PRAGMA foreign_keys=ON")
+    conn.commit()
 
 
 def init_db() -> None:
@@ -204,6 +276,7 @@ def init_db() -> None:
     _migrate_whatsapp_messages_table()
     _migrate_whatsapp_feedback_table()
     _migrate_task_seed_table()
+    _migrate_escalations_table()
 
 
 def create_all_tables() -> list[str]:

@@ -316,6 +316,8 @@ def apply_feedback_webhook(data: dict[str, Any]) -> int:
                                 answer = json.loads(reply.get("response_json") or "{}")
                             except ValueError:
                                 answer = {}
+                            if str(answer.get("flow_token") or "").startswith("cxl_"):
+                                continue  # an answer to the cancellation reason form (cancel_followup.py), not feedback
                             req = None
                             if answer.get("flow_token"):
                                 req = db.query(WhatsAppFeedbackRequest).filter_by(flow_token=answer.get("flow_token")).first()

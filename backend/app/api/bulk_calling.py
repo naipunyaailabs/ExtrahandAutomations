@@ -478,11 +478,6 @@ async def _dial_one_by_one(campaign_id: int):
             if not camp or camp.status != "active":
                 log.info("Campaign #%d is %s. Halting dialer.", campaign_id, camp.status if camp else "deleted")
                 break
-            if not runtime_settings(db).bulk_calling_active:
-                # Global Bulk Calling switch is off: stop dialing; the campaign resumes when it is activated again
-                log.info("Bulk Calling is DEACTIVE. Holding campaign #%d.", campaign_id)
-                break
-
             # Find next pending contact
             item = (
                 db.query(BulkCallItem)
@@ -647,11 +642,6 @@ async def activate_campaign(campaign_id: int, db: Session = Depends(get_db)):
     campaign = db.get(BulkCallCampaign, campaign_id)
     if not campaign:
         raise HTTPException(404, "Campaign not found")
-    if not runtime_settings(db).bulk_calling_active:
-        raise HTTPException(
-            409, "Bulk Calling is DEACTIVE. Click 'Activate Bulk Calling' at the top before starting a campaign."
-        )
-
     campaign.status = "active"
     if not campaign.started_at:
         campaign.started_at = utcnow()

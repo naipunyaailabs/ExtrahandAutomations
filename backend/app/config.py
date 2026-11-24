@@ -86,6 +86,9 @@ class Settings(BaseSettings):
     followup_retry_no_answer: bool = False
     sync_interval_seconds: int = 300
     worker_tick_seconds: int = 10
+    # false on a developer's computer: the API works, but no automations run (no WhatsApp / calls / sync), so a local
+    # backend on the production database never sends anything twice next to the server
+    run_background_worker: bool = True
     auto_dispatch: bool = False
     # Automatic job-offer calls (IVR) start this many hours before the task's scheduled time
     dispatch_lead_hours: float = 6.0

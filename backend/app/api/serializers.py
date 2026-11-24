@@ -128,7 +128,9 @@ def followup_out(f: FollowUp) -> dict:
 def escalation_out(e: Escalation, ticket: Ticket | None = None) -> dict:
     return {
         "id": e.id, "ticket_id": e.ticket_id, "reason": e.reason, "details": e.details, "status": e.status,
-        "assigned_to": e.assigned_to, "notes": e.notes, "created_at": iso(e.created_at),
+        "outcome": e.outcome, "assigned_to": e.assigned_to,
+        "source": e.source or "calling", "customer_name": e.customer_name, "customer_phone": e.customer_phone,
+        "booking_id": e.booking_id, "category": e.category, "conversation_id": e.conversation_id, "notes": e.notes, "created_at": iso(e.created_at),
         "resolved_at": iso(e.resolved_at), "ticket": ticket_out(ticket) if ticket else None,
     }
 

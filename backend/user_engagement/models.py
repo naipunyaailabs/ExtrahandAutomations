@@ -52,6 +52,9 @@ class HelperSummary(BaseModel):
     new_month: Optional[int] = None
     verified: Optional[int] = None
     aadhaar_verified: Optional[int] = None
+    pan_verified: Optional[int] = None
+    bank_verified: Optional[int] = None
+    kyc_complete: Optional[int] = None  # Aadhaar, PAN and bank all verified
     with_completed_jobs: Optional[int] = None
     blocked: Optional[int] = None
     active_month: int = Field(default=0, description="Helpers assigned a Work booked or scheduled this month")

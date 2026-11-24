@@ -9,7 +9,7 @@
  * - Audit-ready CSV export streams
  */
 
-import type { CustomerCategories, EngagementDashboardSummary, EngagementRegions, SilverCustomerPage } from "../types";
+import type { CancelledWorks, CancelledWorksSummary, RefundedWorks, CustomerCategories, EngagementDashboardSummary, EngagementRegions, SilverCustomerPage } from "../types";
 
 export interface OperationalPerformanceKPIs {
   total_volume: number;
@@ -32,6 +32,15 @@ export function createEngagementService(
     dashboard: () => get<EngagementDashboardSummary>("/api/engagement/dashboard"),
     /** Customers and helpers by state and city ({loading: true} while the first read is running). */
     regions: () => get<EngagementRegions>("/api/engagement/regions"),
+    /** Cancelled Works of real customers, with who cancelled and why ({loading: true} during the first read). */
+    cancellations: () => get<CancelledWorks>("/api/engagement/cancellations"),
+    /** The Cancelled Works card numbers for these filters (side, from/to as YYYY-MM-DD India days, city, category, reason, q) */
+    cancellationsSummary: (filters: Record<string, string | null | undefined>) => {
+      const qs = new URLSearchParams(Object.entries(filters).filter(([, v]) => v) as [string, string][]).toString();
+      return get<CancelledWorksSummary>(`/api/engagement/cancellations/summary${qs ? `?${qs}` : ""}`);
+    },
+    /** Refunds to real customers, joined to their Works ({loading: true} during the first read). */
+    refunds: () => get<RefundedWorks>("/api/engagement/refunds"),
     /** Category module: real customers of a month (YYYY-MM) in Diamond / Gold / Platinum / Silver. */
     categories: (month?: string) =>
       get<CustomerCategories>(`/api/engagement/categories${month ? `?month=${month}` : ""}`),

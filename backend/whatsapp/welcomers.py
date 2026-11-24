@@ -535,11 +535,53 @@ def _registrations(audience: str, force: bool = False) -> dict[str, Any]:
             if not uid or not is_real_user(raw, uid):
                 continue  # test / tester accounts are not counted
             users[uid] = {"id": uid, "registered_at": created, "has_phone": bool(rec.get("phone")),
-                          "name": rec.get("name"), "phone": rec.get("phone"), "city": rec.get("city")}
+                          "name": rec.get("name"), "phone": rec.get("phone"), "city": rec.get("city"), "removed": False}
+    # Everyone we actually welcomed stays counted, even when ExtraHand later deleted the account or marked it as a
+    # test account (it then drops out of the signup list above), and also when one ExtraHand list failed to load.
+    # Without this the views showed fewer welcomes than Welcomer Commercials, which counts every message sent.
+    with SessionLocal() as db:
+        for w in (db.query(WhatsAppWelcome)
+                  .filter(WhatsAppWelcome.audience == audience, WhatsAppWelcome.created_at >= since)):
+            if w.user_id in users:
+                continue
+            users[w.user_id] = {"id": w.user_id, "registered_at": w.registered_at or w.created_at,
+                                "has_phone": bool(w.phone), "name": w.name, "phone": w.phone, "city": None,
+                                "removed": True, **(_removed_details(w.user_id, cfg["primary"]) if not error
+                                                    else {"removed_reason": None, "now_name": None})}
     hit = {"at": time.monotonic(), "fetched_at": utcnow(), "users": list(users.values()), "error": error}
-    if users or not error:
-        _history_cache[audience] = hit
+    if not error:
+        _history_cache[audience] = hit  # a read with an error is used once, not cached: the next view tries again
     return hit
+
+
+def _removed_details(user_id: str, primary: set[str]) -> dict[str, Any]:
+    """What ExtraHand says now about someone we welcomed who dropped out of the signup list: why (deleted their
+    account / marked as a test account / changed role), their name there now, and their city."""
+    from app.integrations.extrahand import get_source
+    from app.integrations.mapping import normalize_user
+    from app.services.real_data import is_test_name
+
+    try:
+        src = get_source()
+        data = getattr(src, "live", src)._main("GET", f"/users/{user_id}")
+        u = data.get("data", data) if isinstance(data, dict) else {}
+        u = u.get("user", u) if isinstance(u, dict) else {}
+    except Exception as e:  # noqa: BLE001 - not found, offline, or no live ExtraHand
+        log.info("Welcomer: could not read removed user %s: %s", user_id, e)
+        return {"removed_reason": "No longer in ExtraHand's signup list", "now_name": None}
+    if not isinstance(u, dict) or not u:
+        return {"removed_reason": "No longer on ExtraHand", "now_name": None}
+    name = u.get("name")
+    role = str(u.get("role") or "").lower()
+    if u.get("deletedAt") or str(name or "").strip().lower() == "account deleted" or str(u.get("status") or "").lower() in ("deleted", "inactive"):
+        reason = "Deleted their account"
+    elif u.get("isPaymentTester") or is_test_name(name):
+        reason = "Marked as a test account"
+    elif role and role not in primary:
+        reason = f"Changed role to {role}"
+    else:
+        reason = "No longer in ExtraHand's signup list"
+    return {"removed_reason": reason, "now_name": name, "city": normalize_user(u).get("city")}
 
 
 def _ist_day(dt: datetime) -> str:
@@ -645,6 +687,9 @@ def welcomer_people(
             "user_id": u["id"], "name": u.get("name"), "phone": u.get("phone"), "city": u.get("city"),
             "registered_at": iso(u["registered_at"]), "status": o,
             "welcomed_at": iso(w.created_at) if w else None, "error": w.error if w else None,
+            # welcomed, then deleted on ExtraHand or marked as a test account: still counted, as the message was sent
+            "removed": bool(u.get("removed")),
+            "removed_reason": u.get("removed_reason"), "now_name": u.get("now_name"),
         })
     counts = {k: 0 for k in PEOPLE_STATUSES}
     for p in people:

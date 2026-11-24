@@ -51,14 +51,7 @@ def test_campaign_create_and_lifecycle(client, db):
     assert len(res.json()["contacts"]) == 2
     assert res.json()["contacts"][0]["status"] == "pending"
 
-    # Bulk Calling starts DEACTIVE: a campaign cannot start until the global switch is activated
-    assert client.get("/api/bulk-calling/agent/status").json()["active"] is False
-    res = client.post(f"/api/bulk-calling/campaigns/{camp_id}/activate")
-    assert res.status_code == 409
-    res = client.post("/api/bulk-calling/agent/activate")
-    assert res.json()["active"] is True
-
-    # Activate campaign
+    # No global Bulk Calling switch any more: starting the campaign is enough
     res = client.post(f"/api/bulk-calling/campaigns/{camp_id}/activate")
     assert res.status_code == 200
     assert res.json()["status"] == "active"
