@@ -14,7 +14,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AnimatedNumber } from "./motion";
 import type { Call, CallingFlow, Escalation, Stats, Ticket as TicketType } from "../types";
 import { api } from "../api";
-import { usePoll } from "../hooks";
+import { useCachedState, usePoll } from "../hooks";
 import { CallTimingBanner } from "./CallTimingBanner";
 
 export interface CallingDispatchFlowProps {
@@ -33,6 +33,7 @@ export interface CallingDispatchFlowProps {
  * The minus part only shows when something was cancelled. */
 function PlusMinus({ added, cancelled, what }: { added: number; cancelled: number; what: string }) {
   const left = Math.max(added - cancelled, 0);
+  if (!added) return null; // nothing yet today: no "+0" line
   return (
     <div
       className="node-plus-minus"
@@ -70,7 +71,7 @@ export function CallingDispatchFlow({
 
   // Today's real numbers from the backend (real-customer orders live from ExtraHand + this app's calls,
   // follow-ups and escalations). Nothing is estimated: a 0 means nothing happened today.
-  const [flow, setFlow] = useState<CallingFlow | null>(null);
+  const [flow, setFlow] = useCachedState<CallingFlow>("calling-flow");
   useEffect(() => {
     let stop = false;
     const load = () =>
@@ -93,7 +94,7 @@ export function CallingDispatchFlow({
       p.completed ? `${p.completed} completed` : "",
       p.in_progress ? `${p.in_progress} in progress` : "",
     ].filter(Boolean);
-    return parts.join(" · ") || (p.cancelled ? "all cancelled" : "none");
+    return parts.join(" · ") || (p.cancelled ? "all cancelled" : "No tasks yet today");
   };
 
   const metrics = useMemo(

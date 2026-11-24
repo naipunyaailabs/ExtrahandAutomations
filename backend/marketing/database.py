@@ -473,7 +473,7 @@ def db_save_or_update_event(event_dict: Dict[str, Any]) -> None:
 
 # Plain columns that db_update_event_fields may change (lists/dicts are JSON-encoded separately)
 _EDITABLE_EVENT_FIELDS = {
-    "title", "category", "date_start", "date_end", "impact_level", "description", "demand_surge",
+    "title", "category", "date_start", "date_end", "impact_level", "description", "demand_surge", "source",
     "suggested_discount", "discount_code", "promo_template", "status", "admin_notes", "is_verified",
     "poster_url", "poster_theme", "poster_palette", "poster_generated_at", "published_at",
 }

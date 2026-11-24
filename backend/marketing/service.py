@@ -34,6 +34,9 @@ NATIONAL_NAMES = ("all-india", "all_india", "india", "national")
 APPROVED = "Approved"
 
 
+WHATSAPP_ONLY = "manual_whatsapp"  # festival registered for the WhatsApp message only (no poster)
+
+
 def _region_name(name: str) -> str:
     """Stored spelling of a region; All-India for any of its aliases."""
     if name.strip().lower() in NATIONAL_NAMES:
@@ -111,9 +114,7 @@ class AdvestimentService:
         title = (title or "").strip()
         if not title:
             raise ValueError("Event name is required")
-        code = re.sub(r"[^A-Za-z0-9]", "", discount_code or "").upper()[:40]
-        if not code:
-            raise ValueError("Coupon code is required")
+        code = re.sub(r"[^A-Za-z0-9]", "", discount_code or "").upper()[:40]  # optional
         discount = get_settings().marketing_default_discount
         m = re.search(r"(\d{1,2})$", code)
         if m and 0 < int(m.group(1)) <= 90:
@@ -121,12 +122,20 @@ class AdvestimentService:
         return title, (description or "").strip(), code, discount
 
     def register_manual_event(self, city: str, date: str, title: str, description: str,
-                              discount_code: str) -> CityEvent:
-        """Register a festival for one day in a region's calendar; the poster agent then designs its poster."""
+                              discount_code: str, date_end: Optional[str] = None,
+                              make_poster: bool = True) -> CityEvent:
+        """Register a festival for one day, or several days (dates dragged in the calendar), in a region's
+        calendar; the poster agent then designs its poster."""
         try:
-            datetime.strptime(date, "%Y-%m-%d")
+            first = datetime.strptime(date, "%Y-%m-%d")
+            last = datetime.strptime(date_end, "%Y-%m-%d") if date_end else first
         except ValueError:
-            raise ValueError("Date must be YYYY-MM-DD")
+            raise ValueError("Dates must be YYYY-MM-DD")
+        if last < first:
+            raise ValueError("The last day is before the first day")
+        if (last - first).days > 30:
+            raise ValueError("A festival can cover at most 31 days")
+        date_end = last.strftime("%Y-%m-%d")
         name = _region_name(city)
         if name != "All-India" and not db_find_region_name(name):
             raise ValueError(f"{name} is not a monitored region")
@@ -138,7 +147,7 @@ class AdvestimentService:
             "title": title,
             "category": "Festival",
             "date_start": date,
-            "date_end": date,
+            "date_end": date_end,
             "impact_level": "High",
             "target_services": [],
             "description": description,
@@ -146,7 +155,8 @@ class AdvestimentService:
             "suggested_discount": discount,
             "discount_code": code,
             "promo_template": promo_message(title, name, discount, [], code),
-            "source": "manual",
+            # "manual_whatsapp": registered for the WhatsApp message only, the poster agent leaves it alone
+            "source": "manual" if make_poster else WHATSAPP_ONLY,
             "status": "Approved",
             "importance_score": 80,
             "importance_reason": "Registered by an admin from the calendar.",
@@ -157,7 +167,8 @@ class AdvestimentService:
             "discovery_date": datetime.now().strftime("%Y-%m-%d"),
         }
         db_save_or_update_event(ev)
-        start_event_poster(ev["id"])
+        if make_poster:
+            start_event_poster(ev["id"])
         return CityEvent(**db_get_event_by_id(ev["id"]))
 
     def update_manual_event(self, event_id: str, title: str, description: str, discount_code: str) -> Optional[CityEvent]:
@@ -173,7 +184,8 @@ class AdvestimentService:
             "suggested_discount": discount,
             "promo_template": promo_message(title, ev["city"], discount, ev.get("target_services") or [], code),
         })
-        start_event_poster(event_id)
+        if ev.get("source") != WHATSAPP_ONLY or ev.get("poster_url"):
+            start_event_poster(event_id)
         return CityEvent(**db_get_event_by_id(event_id))
 
     def set_approval(self, event_id: str, approve: bool) -> Optional[CityEvent]:
@@ -239,6 +251,17 @@ def start_event_poster(event_id: str, regenerate: bool = True) -> bool:
     return True
 
 
+def stop_event_poster(event_id: str) -> bool:
+    """Stop the poster agent for a festival: it becomes WhatsApp only (no poster; Create Posters skips it) and
+    the agent's research and last error are cleared. A drawing already in progress cannot be interrupted, but
+    its result is not wanted. False when the festival does not exist."""
+    if not db_get_event_by_id(event_id):
+        return False
+    db_update_event_fields(event_id, {"source": WHATSAPP_ONLY, "knowledge": {}})
+    _poster_errors.pop(event_id, None)
+    return True
+
+
 def event_poster_status(event_id: str) -> Dict[str, Any]:
     """running / ready / failed / none for the event's poster."""
     ev = db_get_event_by_id(event_id)
@@ -279,7 +302,8 @@ def festivals_needing_posters() -> List[Dict[str, Any]]:
     out = []
     for c in db_get_all_cities():
         for ev in db_get_city_events(c["city_name"]):
-            if ev.get("status") == APPROVED and start <= ev.get("date_start", "") <= end and not ev.get("poster_url"):
+            if (ev.get("status") == APPROVED and start <= ev.get("date_start", "") <= end and not ev.get("poster_url")
+                    and ev.get("source") != WHATSAPP_ONLY):
                 out.append(ev)
     return sorted(out, key=lambda e: e.get("date_start", ""))
 

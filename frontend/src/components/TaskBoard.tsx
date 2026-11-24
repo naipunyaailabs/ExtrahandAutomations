@@ -17,7 +17,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { fmtDateTime, fmtMoney, fmtRelative, fmtSlotParts } from "../format";
-import { useUrlState } from "../hooks";
+import { useCachedState, useUrlState } from "../hooks";
 import type { FollowUp, Ticket } from "../types";
 import { CallStart } from "./CallStart";
 import { AnimatedNumber } from "./motion";
@@ -284,7 +284,7 @@ export function TaskBoard({ tickets, onOpenTask, onOpenHelper, onOpenCare, onCha
   const open = (id: string) => (onOpenTask ? onOpenTask(id) : navigate(`/tickets/${encodeURIComponent(id)}`));
 
   // Whether new tasks get WhatsApp alerts / helper calls right now: explains a "Not sent" / "Not called"
-  const [live, setLive] = useState<Awaited<ReturnType<typeof api.calling.outreachStatus>> | null>(null);
+  const [live, setLive] = useCachedState<Awaited<ReturnType<typeof api.calling.outreachStatus>>>("outreach-status");
   useEffect(() => {
     let on = true;
     const load = () => api.calling.outreachStatus().then((s) => on && setLive(s)).catch(() => {});

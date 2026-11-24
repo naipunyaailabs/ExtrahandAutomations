@@ -36,8 +36,6 @@ import {
   Receipt,
   ReceiptIndianRupee,
   Megaphone,
-  Sprout,
-  CalendarDays,
   SlidersHorizontal,
   type LucideIcon,
 } from "lucide-react";
@@ -163,15 +161,7 @@ const AGENTS: Record<AgentKind, { title: string; subtitle: string; icon: LucideI
           { to: "/advertisement/regions", label: "States & Cities", icon: MapPin, match: ["/advertisement/regions"] },
         ],
       },
-      {
-        title: "Task Seeding",
-        items: [
-          { to: "/advertisement/task-seeding", label: "Overview", icon: Sprout },
-          { to: "/advertisement/task-seeding/calendar", label: "Festival Calendar", icon: CalendarDays },
-          { to: "/advertisement/task-seeding/settings", label: "Settings", icon: SlidersHorizontal },
-          { to: "/advertisement/task-seeding/history", label: "Campaign History", icon: History },
-        ],
-      },
+      // Task Seeding has no sidebar section: its festival messages are set in States & Cities (WhatsApp message tab)
     ],
   },
   feedback: {

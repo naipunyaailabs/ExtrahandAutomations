@@ -35,11 +35,13 @@ def task_link(task_id: str, **params: str) -> str:
 def promo_message(title: str, city: str, discount: int, services: Iterable[str], code: str) -> str:
     """Standard WhatsApp promo text for a discovered or merged event."""
     place = "India" if city == "All-India" else city
+    # no coupon (optional for a festival registered by hand): no offer / coupon lines
+    offer = (f"🎁 *Festival Offer:* Flat *{discount}% OFF* on {', '.join(list(services)[:3])}\n"
+             f"🏷 *Coupon Code:* *{code}*\n") if code else ""
     return (
-        f"🎉 *{company()} {title} Special Offer for {place}!* 🎉\n\n"
+        f"🎉 *{company()} {title} {'Special Offer' if code else 'Wishes'} for {place}!* 🎉\n\n"
         f"Celebrate *{title}* with verified home service professionals.\n\n"
-        f"🎁 *Festival Offer:* Flat *{discount}% OFF* on {', '.join(list(services)[:3])}\n"
-        f"🏷 *Coupon Code:* *{code}*\n"
+        f"{offer}"
         f"👉 *Book Online:* {booking_link(city, code)}\n\n"
         f"🛡 Background-verified technicians · On-time guarantee."
     )

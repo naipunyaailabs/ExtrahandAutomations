@@ -4,7 +4,7 @@
  */
 
 import type {
-  AdCommercialReport, AdRates, CityEvent, CitySummary, FestivalFinderStatus, PosterAgentStatus, PosterInfo, PosterScanStatus,
+  AdCommercialReport, AdRates, CityEvent, CitySummary, FestivalFinderStatus, FestivalWhatsAppStatus, PosterAgentStatus, PosterInfo, PosterScanStatus,
   SeedConfig, SeedContact, SeedContactsPage, SeedFestivalCalendar, SeedFestivalDay, SeedService, SeedStatus, SeedTemplateView,
 } from "../types";
 
@@ -36,10 +36,10 @@ export function createMarketingService(
       return get<CityEvent[]>(`/api/advestiment/events/${encodeURIComponent(city)}${qs}`);
     },
 
-    /** Register a festival for one day; the poster agent then designs its poster. */
-    registerEvent: (payload: { city: string; date: string; title: string; description?: string; discount_code: string }) =>
+    /** Register a festival for one day or several (date_end); the poster agent then designs its poster. */
+    registerEvent: (payload: { city: string; date: string; date_end?: string; make_poster?: boolean; title: string; description?: string; discount_code?: string }) =>
       post<CityEvent>("/api/advestiment/events/register", payload),
-    updateRegisteredEvent: (eventId: string, payload: { title: string; description?: string; discount_code: string }) =>
+    updateRegisteredEvent: (eventId: string, payload: { title: string; description?: string; discount_code?: string }) =>
       put<CityEvent>(`/api/advestiment/events/register/${id(eventId)}`, payload),
     deleteEvent: (eventId: string) => del<{ ok: boolean; id: string }>(`/api/advestiment/events/detail/${id(eventId)}`),
 
@@ -57,10 +57,23 @@ export function createMarketingService(
 
     posterStatus: (eventId: string) =>
       get<PosterAgentStatus>(`/api/advestiment/events/detail/${id(eventId)}/poster-status`),
+    /** Stop the poster agent for a festival: WhatsApp only from now on, its research and error cleared. */
+    stopPosterAgent: (eventId: string) =>
+      post<PosterAgentStatus>(`/api/advestiment/events/detail/${id(eventId)}/poster-stop`),
     restartPosterAgent: (eventId: string) =>
       post<PosterAgentStatus>(`/api/advestiment/events/detail/${id(eventId)}/poster-agent`),
     generatePoster: (eventId: string, theme?: string) =>
       post<PosterInfo>(`/api/advestiment/events/detail/${id(eventId)}/generate-poster`, { theme }),
+
+    /** Festival WhatsApp: switch cities on; their customers get the festival poster / message on its dates. */
+    festivalWhatsApp: {
+      status: () => get<FestivalWhatsAppStatus>("/api/marketing/festival-broadcast/status"),
+      setCity: (city: string, active: boolean) =>
+        put<{ active: Record<string, string> }>(`/api/marketing/festival-broadcast/regions/${encodeURIComponent(city)}`, { active }),
+      submitPosterTemplate: () =>
+        post<{ results: Record<string, { ok: boolean; already?: boolean; status?: string; error?: string | null }>; poster_template: FestivalWhatsAppStatus["poster_template"] }>(
+          "/api/marketing/festival-broadcast/poster-template"),
+    },
 
     /** Task-Seeding Agent: first-booking nudges (WhatsApp + optional Telugu call) to new customers. */
     seeding: {
@@ -78,8 +91,11 @@ export function createMarketingService(
       saveTemplate: (language: string, body: { body: string; footer: string; button: string }) =>
         put<SeedTemplateView>(`/api/marketing/task-seeding/template/${language}`, body),
       resetTemplate: (language: string) => del<SeedTemplateView>(`/api/marketing/task-seeding/template/${language}`),
-      festivals: (year: number, month: number) =>
-        get<SeedFestivalCalendar>(`/api/marketing/task-seeding/festivals?year=${year}&month=${month}`),
+      /** `region`: All-India (national festivals) or a city (its own festivals + the All-India ones). */
+      festivals: (year: number, month: number, region?: string) =>
+        get<SeedFestivalCalendar>(
+          `/api/marketing/task-seeding/festivals?year=${year}&month=${month}${region ? `&region=${encodeURIComponent(region)}` : ""}`
+        ),
       saveFestival: (eventId: string, body: { enabled: boolean; services: string[]; promo_code: string; hooks: Record<string, string>; send_from: string | null; send_until: string | null }) =>
         put<SeedFestivalDay>(`/api/marketing/task-seeding/festivals/${id(eventId)}`, body),
       addService: (body: { en: string; te?: string; hi?: string; category: string }) =>

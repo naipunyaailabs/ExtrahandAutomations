@@ -132,6 +132,13 @@ def tick() -> None:
             db.rollback()
             log.exception("task seeding step failed")
         try:
+            from marketing.festival_broadcast import run_festival_broadcast
+
+            run_festival_broadcast(db)  # festival poster / message to customers of the cities switched on
+        except Exception:  # noqa: BLE001
+            db.rollback()
+            log.exception("festival WhatsApp step failed")
+        try:
             from whatsapp.feedback import run_feedback
 
             run_feedback(db)  # WhatsApp feedback form to customers of newly completed tasks

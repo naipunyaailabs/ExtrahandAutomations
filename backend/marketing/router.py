@@ -20,6 +20,7 @@ from .service import (
     poster_scan_status,
     start_event_poster,
     start_poster_scan,
+    stop_event_poster,
 )
 
 logger = logging.getLogger("marketing.router")
@@ -34,16 +35,18 @@ class AddCityPayload(BaseModel):
 
 class ManualEventPayload(BaseModel):
     city: str = "All-India"
-    date: str  # YYYY-MM-DD
+    date: str  # YYYY-MM-DD (first day)
+    date_end: str | None = None  # YYYY-MM-DD (last day, for a festival over several days; empty = one day)
     title: str
     description: str = ""
-    discount_code: str
+    discount_code: str = ""  # optional
+    make_poster: bool = True  # False: registered for the WhatsApp message only, no poster
 
 
 class ManualEventUpdatePayload(BaseModel):
     title: str
     description: str = ""
-    discount_code: str
+    discount_code: str = ""  # optional
 
 
 
@@ -68,7 +71,8 @@ async def register_event(payload: ManualEventPayload):
     """Register a festival for one day in a region's calendar; the poster agent then designs its poster."""
     try:
         return get_advestiment_service().register_manual_event(
-            payload.city, payload.date, payload.title, payload.description, payload.discount_code
+            payload.city, payload.date, payload.title, payload.description, payload.discount_code,
+            date_end=payload.date_end, make_poster=payload.make_poster,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -181,6 +185,14 @@ async def restart_poster_agent(event_id: str):
     return event_poster_status(event_id)
 
 
+@advestiment_router.post("/events/detail/{event_id}/poster-stop")
+async def stop_poster_agent(event_id: str):
+    """Stop the poster agent for this festival: WhatsApp only from now on, research and error cleared."""
+    if not stop_event_poster(event_id):
+        raise HTTPException(status_code=404, detail="Event not found")
+    return event_poster_status(event_id)
+
+
 @advestiment_router.post("/events/detail/{event_id}/generate-poster", response_model=PosterInfo)
 async def generate_poster(event_id: str):
     """Design a new poster now and wait for it (Agent 1 brief + Agent 2 drawing and check)."""
@@ -245,3 +257,6 @@ marketing_router.include_router(marketing_api_router)
 from .task_seeding import router as task_seeding_router  # noqa: E402
 
 marketing_router.include_router(task_seeding_router)  # /api/marketing/task-seeding (Task-Seeding Agent)
+from .festival_broadcast import router as festival_broadcast_router  # noqa: E402
+
+marketing_router.include_router(festival_broadcast_router)  # /api/marketing/festival-broadcast (cities on / off)

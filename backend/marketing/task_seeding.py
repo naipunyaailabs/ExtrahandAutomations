@@ -1370,9 +1370,12 @@ def _festival_json(ev: dict, own: dict, cfg: dict, today: date) -> dict[str, Any
 
 
 @router.get("/festivals")
-def festival_calendar(year: int | None = None, month: int | None = None, db: Session = Depends(get_db)) -> dict[str, Any]:
+def festival_calendar(year: int | None = None, month: int | None = None, region: str | None = None,
+                      db: Session = Depends(get_db)) -> dict[str, Any]:
     """Festival calendar of the Task-Seeding Agent: every festival already registered for the month, with the
-    message the agent sends for it (service, coupon and the festival line in Telugu / Hindi / English)."""
+    message the agent sends for it (service, coupon and the festival line in Telugu / Hindi / English).
+    With `region`: All-India gives the national festivals only; a city gives its own festivals plus the All-India
+    ones (each All-India festival is marked `inherited`: its message is set in the All-India calendar)."""
     today = datetime.now(IST).date()
     y, m = year or today.year, month or today.month
     if not 1 <= m <= 12:
@@ -1383,6 +1386,14 @@ def festival_calendar(year: int | None = None, month: int | None = None, db: Ses
         events = _month_events(y, m)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(500, f"Could not read the festival list: {e}") from e
+    region_name = None
+    if region and region.strip():
+        from .service import _region_name
+
+        region_name = _region_name(region)
+        keep = {"all-india", region_name.lower()}
+        events = [ev for ev in events if (ev.get("city") or "").strip().lower() in keep]
+    national = region_name is not None and region_name.lower() != "all-india"
     return {
         "year": y, "month": m, "today": today.isoformat(), "window_days": int(cfg["festival_window_days"]),
         "festival_campaigns": cfg["festival_campaigns"],
@@ -1390,7 +1401,10 @@ def festival_calendar(year: int | None = None, month: int | None = None, db: Ses
                       "category": v["category"]} for k, v in SERVICES.items()],
         "categories": _booking_categories(db),
         "template": {lang: {k: t[k] for k in ("body", "footer", "button")} for lang, t in template_text(db).items()},
-        "festivals": [_festival_json(ev, messages.get(ev["id"]) or {}, cfg, today) for ev in events],
+        "region": region_name,
+        "festivals": [{**_festival_json(ev, messages.get(ev["id"]) or {}, cfg, today),
+                       "inherited": national and (ev.get("city") or "").strip().lower() == "all-india"}
+                      for ev in events],
     }
 
 

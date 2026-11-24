@@ -554,6 +554,27 @@ class SeedOptOut(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class FestivalBroadcast(Base):
+    """Festival WhatsApp (Advertisement > States & Cities): one row per festival and customer in a city that is
+    switched on. The poster (image template) or the text message, sent once on the festival's send dates."""
+
+    __tablename__ = "festival_broadcasts"
+    __table_args__ = (UniqueConstraint("event_id", "phone", name="uq_festival_broadcast_event_phone"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(120), index=True)
+    event_title: Mapped[str | None] = mapped_column(String(200))
+    city: Mapped[str] = mapped_column(String(120), index=True)
+    phone: Mapped[str] = mapped_column(String(15))  # last 10 digits
+    name: Mapped[str | None] = mapped_column(String(200))
+    kind: Mapped[str] = mapped_column(String(10), default="text")  # poster | text
+    language: Mapped[str | None] = mapped_column(String(10))
+    status: Mapped[str] = mapped_column(String(16), default="sending")  # sending | sent | failed | opted_out
+    message_id: Mapped[str | None] = mapped_column(String(128))
+    error: Mapped[str | None] = mapped_column(String(300))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class WaSupportConversation(Base):
     """WhatsApp Support: one conversation per phone number with the AI customer support agent (or a person)."""
 

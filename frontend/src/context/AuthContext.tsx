@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { api, AUTH_EXPIRED_EVENT, getSessionToken, setSessionToken } from "../api";
 import type { AuthUser } from "../types";
+import { clearViewCache } from "../hooks";
 
 interface AuthContextType {
   user: AuthUser | null;
@@ -75,6 +76,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Any request answered 401 means the session ended (expired, signed out elsewhere): back to the login form.
   useEffect(() => {
     const expired = () => {
+      clearViewCache();
       setSessionToken(null);
       try {
         sessionStorage.removeItem(SESSION_STORAGE_KEY);
@@ -102,6 +104,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const logout = useCallback(async () => {
+    clearViewCache();
     setSessionToken(null);
     try {
       sessionStorage.removeItem(SESSION_STORAGE_KEY);

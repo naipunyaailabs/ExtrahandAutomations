@@ -729,6 +729,17 @@ export interface PosterAgentStatus {
   error?: string;
 }
 
+/** Festival WhatsApp: cities switched on, sends per city and the poster template's review at Meta. */
+export interface FestivalWhatsAppStatus {
+  /** lower-case city name: switched on at (ISO) */
+  active: Record<string, string>;
+  /** lower-case city name */
+  per_city: Record<string, { sent: number; failed: number; last_at: string | null }>;
+  poster_template: { language: string; language_name: string; status: string; rejected_reason: string | null }[];
+  blocked: string | null;
+  last_run: string | null;
+}
+
 export interface CitySummary {
   city_name: string;
   state: string;
@@ -1971,6 +1982,8 @@ export interface SeedFestivalDay {
   id: string;
   title: string;
   region: string;
+  /** An All-India festival shown in a city calendar: read-only there (its message is set in the All-India calendar). */
+  inherited?: boolean;
   date_start: string;
   date_end: string;
   status: string;
@@ -1994,6 +2007,8 @@ export interface SeedFestivalDay {
 export interface SeedFestivalCalendar {
   year: number;
   month: number;
+  /** The region asked for (null = every festival) */
+  region?: string | null;
   today: string;
   window_days: number;
   festival_campaigns: boolean;

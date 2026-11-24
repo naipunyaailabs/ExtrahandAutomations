@@ -13,6 +13,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Send,
   Sparkles,
   Tag,
   Trash2,
@@ -23,11 +24,13 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api } from "../api";
-import { useGoBack, useUrlState } from "../hooks";
+import { useGoBack, usePoll, useUrlState } from "../hooks";
 import { useBranding } from "../branding";
 import { useToast } from "./ui";
 import { FestivalPosterCard, posterDesign } from "./FestivalPosterCard";
-import type { CityEvent, CitySummary, FestivalFinderStatus, PosterAgentStatus, PosterScanStatus } from "../types";
+import { FestivalMessagePanel } from "../pages/TaskSeedingCalendar";
+import "../pages/task-seeding.css";
+import type { CityEvent, CitySummary, FestivalFinderStatus, FestivalWhatsAppStatus, PosterAgentStatus, PosterScanStatus } from "../types";
 
 /*
  * Advertisement agent UI.
@@ -44,7 +47,6 @@ const MONTH_NAMES = [
   "July", "August", "September", "October", "November", "December",
 ];
 const WEEKDAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const REGION_TYPE_LABEL: Record<string, string> = { national: "National", state: "State", union_territory: "UT", city: "City" };
 
 /** Calendar page of a region (All-India or a city). */
 export const regionCalendarPath = (name: string) => `/advertisement/regions/${encodeURIComponent(name)}`;
@@ -56,6 +58,8 @@ const sameName = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 const isPending = (ev: CityEvent) => ev.status === "Pending Review";
 /** Approved festival whose last day is before today: shown greyed out with its poster, no regenerate / edit. */
 const isCompleted = (ev: CityEvent, today: string) => !isPending(ev) && (ev.date_end || ev.date_start || "") < today;
+/** Source of a festival registered for the WhatsApp message only: no poster is made for it. */
+const WHATSAPP_ONLY = "manual_whatsapp";
 const coversDate = (ev: CityEvent, date: string) => !!ev.date_start && date >= ev.date_start && date <= (ev.date_end || ev.date_start);
 
 // ---- shared styles ------------------------------------------------------------
@@ -202,14 +206,20 @@ export function AdvertisementView({ mode = "dashboard" }: { mode?: "dashboard" |
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDateStr, selectedCity]);
   const [events, setEvents] = useState<CityEvent[]>([]);
+  // All-India festivals shown in a city calendar: read-only there (no poster, edit or approval in the city)
+  const [indiaEvents, setIndiaEvents] = useState<CityEvent[]>([]);
   const [loadingEvents, setLoadingEvents] = useState(false);
 
   const fetchEvents = async (keepDate?: string) => {
     if (!selectedCity) return;
     setLoadingEvents(true);
     try {
-      const data = await api.advestiment.events(selectedCity, calYear, calMonth + 1);
+      const [data, india] = await Promise.all([
+        api.advestiment.events(selectedCity, calYear, calMonth + 1),
+        isIndiaSelected ? Promise.resolve([] as CityEvent[]) : api.advestiment.events("All-India", calYear, calMonth + 1).catch(() => [] as CityEvent[]),
+      ]);
       setEvents(data);
+      setIndiaEvents(india); // approved and awaiting approval (marked), view only in the city
       const monthPrefix = `${calYear}-${String(calMonth + 1).padStart(2, "0")}-`;
       setSelectedDateStr((current) => {
         if (keepDate) return keepDate;
@@ -245,20 +255,65 @@ export function AdvertisementView({ mode = "dashboard" }: { mode?: "dashboard" |
     const first = new Date(calYear, calMonth, 1).getDay();
     const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
     const daysInPrev = new Date(calYear, calMonth, 0).getDate();
-    const cells: { dayNumber: number; dateStr: string; events: CityEvent[] }[] = [];
-    for (let i = first - 1; i >= 0; i--) cells.push({ dayNumber: daysInPrev - i, dateStr: "", events: [] });
+    const cells: { dayNumber: number; dateStr: string; events: CityEvent[]; india: CityEvent[] }[] = [];
+    for (let i = first - 1; i >= 0; i--) cells.push({ dayNumber: daysInPrev - i, dateStr: "", events: [], india: [] });
     for (let d = 1; d <= daysInMonth; d++) {
       const dateStr = isoDate(new Date(calYear, calMonth, d));
-      cells.push({ dayNumber: d, dateStr, events: events.filter((ev) => coversDate(ev, dateStr)) });
+      cells.push({ dayNumber: d, dateStr, events: events.filter((ev) => coversDate(ev, dateStr)), india: indiaEvents.filter((ev) => coversDate(ev, dateStr)) });
     }
-    for (let n = 1; cells.length % 7 !== 0; n++) cells.push({ dayNumber: n, dateStr: "", events: [] });
+    for (let n = 1; cells.length % 7 !== 0; n++) cells.push({ dayNumber: n, dateStr: "", events: [], india: [] });
     return cells;
-  }, [calYear, calMonth, events]);
+  }, [calYear, calMonth, events, indiaEvents]);
 
   // ---- selected day: register / edit / poster -------------------------------
+  // Drag across days to pick several (a festival over a few days); a plain click picks one day.
+  const [range, setRange] = useState<{ from: string; to: string }>({ from: "", to: "" });
+  const rangeTo = range.from === selectedDateStr && range.to > selectedDateStr ? range.to : selectedDateStr;
+  const isRange = rangeTo > selectedDateStr;
+  const dragAnchor = useRef<string | null>(null);
+  const pickDay = (date: string) => {
+    dragAnchor.current = date;
+    setSelectedDateStr(date);
+    setRange({ from: date, to: date });
+  };
+  const dragOver = (date: string) => {
+    const anchor = dragAnchor.current;
+    if (!anchor) return;
+    const [from, to] = date < anchor ? [date, anchor] : [anchor, date];
+    setSelectedDateStr(from);
+    setRange({ from, to });
+  };
+  useEffect(() => {
+    const stop = () => {
+      if (!dragAnchor.current) return;
+      dragAnchor.current = null;
+      // several future days dragged: open the form to register one festival over all of them
+      setRange((r) => {
+        if (r.to > r.from && r.from >= todayIso) setTimeout(() => setFormMode("create"), 0);
+        return r;
+      });
+    };
+    window.addEventListener("mouseup", stop);
+    return () => window.removeEventListener("mouseup", stop);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [todayIso]);
+  const fmtDay = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+  const selectedLabel = isRange ? `${fmtDay(selectedDateStr)} – ${fmtDay(rangeTo)}` : selectedDateStr;
   const dayEvents = useMemo(() => events.filter((ev) => coversDate(ev, selectedDateStr)), [events, selectedDateStr]);
+  const dayIndiaEvents = useMemo(() => indiaEvents.filter((ev) => coversDate(ev, selectedDateStr)), [indiaEvents, selectedDateStr]);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
-  const dayEvent = dayEvents.find((e) => e.id === selectedEventId) || dayEvents[0] || null;
+  // An All-India festival picked in a city calendar: its poster and message are shown, nothing can be changed
+  const selIndia = dayIndiaEvents.find((e) => e.id === selectedEventId) ?? (dayEvents.length === 0 ? dayIndiaEvents[0] ?? null : null);
+  const dayEvent = selIndia ? null : dayEvents.find((e) => e.id === selectedEventId) || dayEvents[0] || null;
+  // Right panel: the festival's poster, or the Task-Seeding WhatsApp message (sent to Meta from there)
+  const [panelTab, setPanelTab] = useState<"poster" | "message">("poster");
+  const focusEvent = selIndia ?? dayEvent;
+  // a festival registered for the WhatsApp message only opens on its message
+  useEffect(() => {
+    setPanelTab(focusEvent?.source === WHATSAPP_ONLY ? "message" : "poster");
+  }, [focusEvent?.id, focusEvent?.source]);
+  // what a new festival is registered for: the poster agent (name, description, coupon) or the WhatsApp message (name)
+  const [formKind, setFormKind] = useState<"poster" | "whatsapp">("poster");
   const dayCompleted = !!dayEvent && isCompleted(dayEvent, todayIso);
 
   const emptyForm = { title: "", description: "", code: "" };
@@ -285,20 +340,25 @@ export function AdvertisementView({ mode = "dashboard" }: { mode?: "dashboard" |
     e.preventDefault();
     const title = form.title.trim();
     const code = form.code.trim();
-    if (!title || !code) {
-      toast.error("Missing Details", "Event name and coupon code are required.");
+    if (!title) {
+      toast.error("Missing Details", "Event name is required.");
       return;
     }
-    const payload = { title, description: form.description.trim(), discount_code: code };
+    const whatsappOnly = formMode === "edit" ? dayEvent?.source === WHATSAPP_ONLY : formKind === "whatsapp";
+    const payload = whatsappOnly
+      ? { title, description: "", discount_code: "" }
+      : { title, description: form.description.trim(), discount_code: code };
     setSaving(true);
     try {
       const ev =
         formMode === "edit" && dayEvent
           ? await api.advestiment.updateRegisteredEvent(dayEvent.id, payload)
-          : await api.advestiment.registerEvent({ city: selectedCity, date: selectedDateStr, ...payload });
-      toast.success(formMode === "edit" ? "Event Updated" : "Event Registered", `${ev.title} · ${ev.date_start}. The poster agent is creating its poster.`);
+          : await api.advestiment.registerEvent({ city: selectedCity, date: selectedDateStr, date_end: isRange ? rangeTo : undefined, make_poster: !whatsappOnly, ...payload });
+      toast.success(formMode === "edit" ? "Event Updated" : "Event Registered",
+        whatsappOnly ? `${ev.title} · ${ev.date_start}. Write its WhatsApp message and send it to Meta.` : `${ev.title} · ${ev.date_start}. The poster agent is creating its poster.`);
       setSelectedEventId(ev.id);
-      setPosterStatus({ status: "running" });
+      if (whatsappOnly) setPanelTab("message");
+      else setPosterStatus({ status: "running" });
       await reloadAfterChange(ev.date_start);
       setForm(emptyForm);
       setFormMode("closed");
@@ -444,8 +504,10 @@ export function AdvertisementView({ mode = "dashboard" }: { mode?: "dashboard" |
     const check = async () => {
       try {
         let st = await api.advestiment.posterStatus(posterEventId);
-        // Event without a poster: start the poster agent once, automatically
-        if (st.status === "none" && !dayCompleted && !autoStarted.current.has(posterEventId)) {
+        // Event without a poster: start the poster agent once, automatically. Never for a WhatsApp-only festival
+        // (registered for the message, or its poster agent was stopped): its poster is made only on request.
+        const whatsappOnly = events.find((x) => x.id === posterEventId)?.source === WHATSAPP_ONLY;
+        if (st.status === "none" && !dayCompleted && !whatsappOnly && !autoStarted.current.has(posterEventId)) {
           autoStarted.current.add(posterEventId);
           st = await api.advestiment.restartPosterAgent(posterEventId);
         }
@@ -470,6 +532,16 @@ export function AdvertisementView({ mode = "dashboard" }: { mode?: "dashboard" |
     };
   }, [posterEventId, posterStatus?.status === "running"]);
 
+  const stopPoster = async (ev: CityEvent) => {
+    try {
+      setPosterStatus(await api.advestiment.stopPosterAgent(ev.id));
+      toast.success("Poster agent stopped", `${ev.title} is WhatsApp only now. Use the WhatsApp message tab.`);
+      await fetchEvents(selectedDateStr);
+      setPanelTab("message");
+    } catch (err: unknown) {
+      toast.error("Could not stop the agent", err instanceof Error ? err.message : "Please try again.");
+    }
+  };
   const retryPoster = async (ev: CityEvent) => {
     try {
       setPosterStatus(await api.advestiment.restartPosterAgent(ev.id));
@@ -505,6 +577,28 @@ export function AdvertisementView({ mode = "dashboard" }: { mode?: "dashboard" |
 
   // ---- States & Cities grid -----------------------------------------------------
   const [regionQuery, setRegionQuery] = useState("");
+  // Festival WhatsApp: cities switched on get their festival posters / messages sent to their customers
+  const fw = usePoll<FestivalWhatsAppStatus>(api.marketing.festivalWhatsApp.status, 30000);
+  const [fwActive, setFwActive] = useState<Record<string, string> | null>(null);
+  const activeMap = fwActive ?? fw.data?.active ?? {};
+  const isActive = (c: CitySummary) => !!activeMap[c.city_name.toLowerCase()];
+  const [switching, setSwitching] = useState<string | null>(null);
+  const switchCity = async (c: CitySummary) => {
+    const on = !isActive(c);
+    setSwitching(c.city_name);
+    try {
+      const res = await api.marketing.festivalWhatsApp.setCity(c.city_name, on);
+      setFwActive(res.active);
+      toast.success(on ? `${c.city_name} is on` : `${c.city_name} is off`,
+        on ? "Its customers get the festival poster / WhatsApp message on each festival's dates." : "No festival WhatsApp is sent there now.");
+      fw.refresh();
+    } catch (err: unknown) {
+      toast.error("Could not switch the city", err instanceof Error ? err.message : "Please try again.");
+    } finally {
+      setSwitching(null);
+    }
+  };
+  const activeCount = cityRegions.filter(isActive).length;
   const regionGroups = useMemo(() => {
     const q = regionQuery.trim().toLowerCase();
     const match = (c: CitySummary) => !q || c.city_name.toLowerCase().includes(q) || (c.state || "").toLowerCase().includes(q);
@@ -522,11 +616,13 @@ export function AdvertisementView({ mode = "dashboard" }: { mode?: "dashboard" |
         groups.push({
           title: state,
           subtitle: `${items.length} ${items.length === 1 ? "city" : "cities"}`,
-          items: [...items].sort((a, b) => a.city_name.localeCompare(b.city_name)),
+          // cities switched on first, then by name
+          items: [...items].sort((a, b) => Number(isActive(b)) - Number(isActive(a)) || a.city_name.localeCompare(b.city_name)),
         })
       );
     return groups;
-  }, [cities, cityRegions, regionQuery]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cities, cityRegions, regionQuery, activeMap]);
 
   // ---- dashboard metrics -----------------------------------------------------
   const monthLabel = `${MONTH_NAMES[new Date().getMonth()]} ${new Date().getFullYear()}`;
@@ -568,38 +664,87 @@ export function AdvertisementView({ mode = "dashboard" }: { mode?: "dashboard" |
     </motion.div>
   );
 
+  const nationalCount = cities.find(isNational)?.upcoming_events_count ?? 0;
   const regionCard = (c: CitySummary) => {
     const national = isNational(c);
-    const kind = c.region_type || (national ? "national" : "city");
+    const own = c.upcoming_events_count;
+    const total = national ? own : own + nationalCount;
+    const on = !national && isActive(c);
+    const sends = fw.data?.per_city[c.city_name.toLowerCase()];
+    const open = () => navigate(regionCalendarPath(c.city_name));
     return (
-      <motion.button
+      <motion.div
         key={c.city_name}
-        type="button"
+        role="link"
+        tabIndex={0}
         whileHover={{ y: -2 }}
-        whileTap={{ scale: 0.98 }}
-        onClick={() => navigate(regionCalendarPath(c.city_name))}
+        onClick={open}
+        onKeyDown={(e) => { if (e.key === "Enter") open(); }}
         style={{
-          textAlign: "left", padding: "11px 13px", borderRadius: "11px", cursor: "pointer",
-          border: national ? "1px solid #bfdbfe" : "1px solid #e2e8f0", background: national ? "#f8fbff" : "#ffffff",
-          boxShadow: "0 1px 2px rgba(0,0,0,0.03)", display: "flex", flexDirection: "column", gap: "7px", minWidth: 0,
+          position: "relative", textAlign: "left", padding: "14px 14px 12px", borderRadius: "14px", cursor: "pointer", minWidth: 0,
+          border: on ? "1.5px solid #86efac" : national ? "1px solid #bfdbfe" : "1px solid #e2e8f0",
+          background: on ? "linear-gradient(180deg, #f0fdf4 0%, #ffffff 70%)" : national ? "#f8fbff" : "#ffffff",
+          boxShadow: on ? "0 4px 14px rgba(22, 163, 74, 0.10)" : "0 1px 2px rgba(15, 23, 42, 0.04)",
+          display: "flex", flexDirection: "column", gap: "10px",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "6px", minWidth: 0 }}>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: "6px", minWidth: 0 }}>
-            {national ? <Globe size={14} style={{ color: "#2563eb", flexShrink: 0 }} /> : <MapPin size={14} style={{ color: "#64748b", flexShrink: 0 }} />}
-            <span title={c.city_name} style={{ fontSize: "12.5px", fontWeight: 700, color: "#0f172a", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-              {national ? "India" : c.city_name}
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "8px", minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "9px", minWidth: 0 }}>
+            <span style={{ width: "30px", height: "30px", borderRadius: "9px", flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
+              background: national ? "#dbeafe" : on ? "#dcfce7" : "#f1f5f9", color: national ? "#1d4ed8" : on ? "#15803d" : "#64748b" }}>
+              {national ? <Globe size={15} /> : <MapPin size={15} />}
             </span>
-          </span>
-          <span style={{ fontSize: "10px", fontWeight: 700, color: national ? "#1d4ed8" : "#475569", background: national ? "#dbeafe" : "#f1f5f9", borderRadius: "6px", padding: "1px 6px", flexShrink: 0 }}>
-            {REGION_TYPE_LABEL[kind] ?? kind}
-          </span>
+            <div style={{ minWidth: 0 }}>
+              <div title={c.city_name} style={{ fontSize: "13.5px", fontWeight: 700, color: "#0f172a", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                {national ? "All-India" : c.city_name}
+              </div>
+              <div style={{ fontSize: "11px", color: "#64748b", fontWeight: 500 }}>{national ? "National" : c.state || "City"}</div>
+            </div>
+          </div>
+          {!national && (
+            <button
+              type="button"
+              role="switch"
+              aria-checked={on}
+              aria-label={`Festival WhatsApp for ${c.city_name}`}
+              title={on ? "On: festival posters / messages are sent to this city's customers. Click to switch off." : "Off: click to send this city's festival posters / messages to its customers"}
+              disabled={switching === c.city_name}
+              onClick={(e) => { e.stopPropagation(); switchCity(c); }}
+              onKeyDown={(e) => e.stopPropagation()}
+              style={{ flexShrink: 0, width: "38px", height: "22px", borderRadius: "999px", border: "none", padding: "2px", cursor: switching === c.city_name ? "wait" : "pointer",
+                background: on ? "#16a34a" : "#cbd5e1", display: "flex", justifyContent: on ? "flex-end" : "flex-start", transition: "background .15s ease" }}
+            >
+              <span style={{ width: "18px", height: "18px", borderRadius: "50%", background: "#ffffff", boxShadow: "0 1px 2px rgba(0,0,0,0.25)" }} />
+            </button>
+          )}
         </div>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "11.5px", color: "#64748b", fontWeight: 500 }}>
-          <CalendarIcon size={12} />
-          <b style={{ color: "#0f172a" }}>{c.upcoming_events_count}</b> upcoming {c.upcoming_events_count === 1 ? "festival" : "festivals"}
-        </span>
-      </motion.button>
+
+        <div style={{ display: "flex", alignItems: "baseline", gap: "6px" }}>
+          <span style={{ fontSize: "22px", fontWeight: 750, color: "#0f172a", lineHeight: 1 }}>{total}</span>
+          <span style={{ fontSize: "12px", color: "#475569", fontWeight: 500 }}>upcoming {total === 1 ? "festival" : "festivals"}</span>
+        </div>
+        {!national && nationalCount > 0 && (
+          <div style={{ fontSize: "11px", color: "#64748b", marginTop: "-6px" }}>
+            {own} city · <span style={{ color: "#2563eb", fontWeight: 600 }}>{nationalCount} All-India</span>
+          </div>
+        )}
+
+        <div style={{ borderTop: "1px dashed #e2e8f0", paddingTop: "8px", fontSize: "11px", fontWeight: 600, display: "flex", alignItems: "center", gap: "6px",
+          color: national ? "#1d4ed8" : on ? "#15803d" : "#94a3b8" }}>
+          {national ? (
+            <>Shown in every city</>
+          ) : on ? (
+            <>
+              <span style={{ width: "7px", height: "7px", borderRadius: "50%", background: "#16a34a", flexShrink: 0 }} />
+              <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                Sending on festival dates{sends?.sent ? ` · ${sends.sent} sent` : ""}{sends?.failed ? ` · ${sends.failed} failed` : ""}
+              </span>
+            </>
+          ) : (
+            <>Festival WhatsApp off</>
+          )}
+        </div>
+      </motion.div>
     );
   };
 
@@ -609,6 +754,31 @@ export function AdvertisementView({ mode = "dashboard" }: { mode?: "dashboard" |
 
   const dayPanel = (
     <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+      {formMode === "closed" && dayIndiaEvents.map((ev) => (
+        <div key={`in-${ev.id}`} onClick={() => setSelectedEventId(ev.id)}
+          style={{ border: selIndia?.id === ev.id ? "1.5px solid #60a5fa" : "1px dashed #93c5fd", background: "#f8fbff", borderRadius: "10px", padding: "10px 12px", display: "flex", gap: "10px", alignItems: "flex-start", cursor: "pointer" }}>
+          <Globe size={16} style={{ color: "#2563eb", flexShrink: 0, marginTop: "1px" }} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+              <span style={{ fontSize: "13px", fontWeight: 700, color: "#0f172a" }}>{ev.title}</span>
+              <span style={{ fontSize: "10.5px", fontWeight: 700, color: "#1d4ed8", background: "#dbeafe", borderRadius: "6px", padding: "1px 7px" }}>All-India</span>
+              {isPending(ev) && (
+                <span style={{ fontSize: "10.5px", fontWeight: 700, color: "#a16207", background: "#fef9c3", border: "1px solid #fde68a", borderRadius: "6px", padding: "1px 7px" }}>Awaiting approval</span>
+              )}
+              {ev.discount_code && (
+                <span style={{ fontSize: "11px", fontWeight: 700, letterSpacing: "0.04em", color: "#1d4ed8", border: "1px dashed #93c5fd", borderRadius: "6px", padding: "1px 7px" }}>{ev.discount_code}</span>
+              )}
+            </div>
+            <div style={{ fontSize: "11.5px", color: "#64748b", marginTop: "4px", lineHeight: 1.45 }}>
+              National festival, shown in every city: view only here. Its poster and message are changed in the{" "}
+              <button type="button" onClick={(e) => { e.stopPropagation(); navigate(`${regionCalendarPath("All-India")}?date=${selectedDateStr}`); }}
+                style={{ background: "none", border: "none", padding: 0, color: "#2563eb", fontWeight: 600, cursor: "pointer", fontSize: "11.5px" }}>
+                All-India calendar
+              </button>.
+            </div>
+          </div>
+        </div>
+      ))}
       {dayEvents.map((ev) => {
         const selected = dayEvent?.id === ev.id;
         const done = isCompleted(ev, todayIso);
@@ -628,12 +798,14 @@ export function AdvertisementView({ mode = "dashboard" }: { mode?: "dashboard" |
                 <div style={{ fontSize: "12px", color: "#475569", marginTop: "3px", lineHeight: 1.45, whiteSpace: "pre-wrap" }}>{ev.description}</div>
               )}
               <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap", marginTop: "6px" }}>
+                {ev.discount_code && (
                 <span style={{ fontSize: "11.5px", fontWeight: 700, letterSpacing: "0.04em", borderRadius: "6px", padding: "2px 8px",
                   ...(done
                     ? { color: "#64748b", background: "#f1f5f9", border: "1px dashed #cbd5e1", textDecoration: "line-through" }
                     : { color: "#15803d", background: "#dcfce7", border: "1px dashed #86efac" }) }}>
                   {ev.discount_code}
                 </span>
+                )}
                 {done && (
                   <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "11px", fontWeight: 700, color: "#475569", background: "#e2e8f0", border: "1px solid #cbd5e1", borderRadius: "6px", padding: "2px 8px" }}>
                     <CheckCircle2 size={11} /> Completed
@@ -705,6 +877,21 @@ export function AdvertisementView({ mode = "dashboard" }: { mode?: "dashboard" |
       {formMode !== "closed" || (dayEvents.length === 0 && selectedDateStr >= todayIso) ? (
         <form onSubmit={submitForm} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
           {formMode === "edit" && <span style={smallHeading}>Edit event</span>}
+          {formMode !== "edit" && (
+            <div role="radiogroup" aria-label="Register for" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+              {([
+                ["poster", "Poster agent", "Name, description and coupon; the agent designs a poster", ImageIcon],
+                ["whatsapp", "WhatsApp message", "Name only; then write the message and send it to Meta", Send],
+              ] as const).map(([key, label, hint, Icon]) => (
+                <button key={key} type="button" role="radio" aria-checked={formKind === key} onClick={() => setFormKind(key)}
+                  style={{ textAlign: "left", padding: "9px 11px", borderRadius: "10px", cursor: "pointer", display: "flex", flexDirection: "column", gap: "3px",
+                    border: formKind === key ? "1.5px solid #0f172a" : "1px solid #e2e8f0", background: formKind === key ? "#f8fafc" : "#ffffff", color: "#0f172a" }}>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "13px", fontWeight: 700 }}><Icon size={14} /> {label}</span>
+                  <span style={{ fontSize: "11px", color: "#64748b", lineHeight: 1.35 }}>{hint}</span>
+                </button>
+              ))}
+            </div>
+          )}
           <label style={fieldLabel}>
             Event Name
             <input
@@ -717,8 +904,9 @@ export function AdvertisementView({ mode = "dashboard" }: { mode?: "dashboard" |
               style={field}
             />
           </label>
+          {(formMode === "edit" ? dayEvent?.source !== WHATSAPP_ONLY : formKind === "poster") && (<>
           <label style={fieldLabel}>
-            Description
+            <span>Description <span style={{ color: "#94a3b8", fontWeight: 500 }}>(optional)</span></span>
             <textarea
               value={form.description}
               onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
@@ -728,17 +916,17 @@ export function AdvertisementView({ mode = "dashboard" }: { mode?: "dashboard" |
             />
           </label>
           <label style={fieldLabel}>
-            Coupon Code
+            <span>Coupon Code <span style={{ color: "#94a3b8", fontWeight: 500 }}>(optional)</span></span>
             <input
               type="text"
               value={form.code}
               onChange={(e) => setForm((f) => ({ ...f, code: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "") }))}
               placeholder="e.g. DIWALI30"
-              required
               maxLength={40}
               style={{ ...field, fontWeight: 700, letterSpacing: "0.05em" }}
             />
           </label>
+          </>)}
           <div style={{ display: "flex", gap: "8px" }}>
             {formMode !== "closed" && (
               <button type="button" onClick={() => setFormMode("closed")} disabled={saving} style={{ ...btnLight, padding: "9px 14px", fontSize: "13px" }}>
@@ -747,7 +935,7 @@ export function AdvertisementView({ mode = "dashboard" }: { mode?: "dashboard" |
             )}
             <button type="submit" disabled={saving} style={{ ...btnDark, flex: 1, justifyContent: "center", padding: "9px 16px", fontSize: "13px", fontWeight: 700, cursor: saving ? "wait" : "pointer" }}>
               {saving ? <RefreshCw size={13} className="spin" /> : <CheckCircle2 size={14} />}
-              {saving ? "Saving…" : formMode === "edit" ? "Save Changes" : `Submit · Register for ${selectedDateStr}`}
+              {saving ? "Saving…" : formMode === "edit" ? "Save Changes" : `Submit · Register for ${selectedLabel}`}
             </button>
           </div>
           {formMode === "edit" && dayEvent && (
@@ -777,13 +965,20 @@ export function AdvertisementView({ mode = "dashboard" }: { mode?: "dashboard" |
       ) : dayEvent && (posterStatus?.status === "failed" || posterStatus?.status === "none") ? (
         <div style={posterStatus.status === "failed" ? { ...emptyBox, border: "1px dashed #fecaca", background: "#fef2f2", color: "#991b1b" } : emptyBox}>
           <b style={{ display: "block", marginBottom: "4px" }}>
-            {posterStatus.status === "failed" ? "The poster agent could not create the poster" : `No poster yet for ${dayEvent.title}`}
+            {posterStatus.status === "failed" ? "The poster agent could not create the poster"
+              : dayEvent.source === WHATSAPP_ONLY ? `${dayEvent.title} is WhatsApp only: no poster` : `No poster yet for ${dayEvent.title}`}
           </b>
           {posterStatus.error && <span style={{ fontSize: "12px" }}>{posterStatus.error}</span>}
-          <div>
-            <button type="button" onClick={() => retryPoster(dayEvent)} style={{ ...btnDark, marginTop: "10px" }}>
+          <div style={{ display: "flex", gap: "8px", justifyContent: "center", flexWrap: "wrap", marginTop: "10px" }}>
+            <button type="button" onClick={() => retryPoster(dayEvent)} style={btnDark}>
               <RefreshCw size={12} /> {posterStatus.status === "failed" ? "Try Again" : "Create Poster"}
             </button>
+            {(posterStatus.status === "failed" || dayEvent.knowledge?.summary) && (
+              <button type="button" onClick={() => stopPoster(dayEvent)} style={{ ...btnLight, color: "#dc2626", border: "1px solid #fecaca" }}
+                title="No poster for this festival: the agent stops and its research is cleared">
+                <XCircle size={13} /> Stop poster agent
+              </button>
+            )}
           </div>
         </div>
       ) : dayEvent ? (
@@ -921,7 +1116,7 @@ export function AdvertisementView({ mode = "dashboard" }: { mode?: "dashboard" |
               <div>
                 <h1 style={{ margin: 0, fontSize: "1.3rem", fontWeight: 700, letterSpacing: "-0.02em" }}>States &amp; Cities</h1>
                 <p style={{ margin: "3px 0 0", fontSize: "12.5px", color: "#64748b", fontWeight: 500 }}>
-                  All-India and {cityRegions.length} cities. Click a card to open its festival calendar and register festivals.
+                  All-India and {cityRegions.length} cities. Open a card for its festival calendar; switch a city on to send its festival posters and WhatsApp messages to its customers on the festival dates.
                 </p>
               </div>
             </div>
@@ -937,6 +1132,11 @@ export function AdvertisementView({ mode = "dashboard" }: { mode?: "dashboard" |
                   style={{ border: "none", outline: "none", fontSize: "12.5px", width: "160px", background: "transparent", color: "#0f172a" }}
                 />
               </label>
+              <span title="Cities whose customers get festival posters / messages" style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "12px", fontWeight: 650,
+                color: activeCount ? "#15803d" : "#64748b", background: activeCount ? "#f0fdf4" : "#f8fafc", border: `1px solid ${activeCount ? "#bbf7d0" : "#e2e8f0"}`, borderRadius: "999px", padding: "5px 11px" }}>
+                <span style={{ width: "7px", height: "7px", borderRadius: "50%", background: activeCount ? "#16a34a" : "#cbd5e1" }} />
+                {activeCount} of {cityRegions.length} cities on
+              </span>
               <button type="button" onClick={() => setShowAddCity(true)} style={btnDark}>
                 <Plus size={13} />
                 Add City
@@ -958,8 +1158,13 @@ export function AdvertisementView({ mode = "dashboard" }: { mode?: "dashboard" |
                   <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
                     <span style={{ ...smallHeading, letterSpacing: "0.06em" }}>{g.title}</span>
                     <span style={{ fontSize: "11px", color: "#94a3b8" }}>{g.subtitle}</span>
+                    {g.title !== "India" && g.items.some(isActive) && (
+                      <span style={{ fontSize: "10.5px", fontWeight: 700, color: "#15803d", background: "#dcfce7", borderRadius: "999px", padding: "1px 8px" }}>
+                        {g.items.filter(isActive).length} on
+                      </span>
+                    )}
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(168px, 1fr))", gap: "10px" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))", gap: "12px" }}>
                     {g.items.map(regionCard)}
                   </div>
                 </section>
@@ -1061,7 +1266,7 @@ export function AdvertisementView({ mode = "dashboard" }: { mode?: "dashboard" |
           </div>
 
           {/* Calendar and day panel fill the rest of the screen: no page scroll */}
-          <div style={{ display: "grid", gridTemplateColumns: showPoster ? "minmax(0, 1fr) minmax(0, 1.2fr)" : "minmax(0, 1.4fr) minmax(0, 0.8fr)", gap: "12px", flex: 1, minHeight: 0 }}>
+          <div style={{ display: "grid", gridTemplateColumns: showPoster || panelTab === "message" || !!selIndia?.poster_url ? "minmax(0, 1fr) minmax(0, 1.2fr)" : "minmax(0, 1.4fr) minmax(0, 0.8fr)", gap: "12px", flex: 1, minHeight: 0 }}>
             <div style={{ ...card, padding: "12px 14px", display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px", gap: "8px", flexWrap: "wrap" }}>
                 <span style={{ display: "flex", alignItems: "center", gap: "8px", fontWeight: 700, fontSize: "14px" }}>
@@ -1070,7 +1275,7 @@ export function AdvertisementView({ mode = "dashboard" }: { mode?: "dashboard" |
                   {loadingEvents && <RefreshCw size={12} className="spin" style={{ color: "#2563eb" }} />}
                 </span>
                 <span style={{ fontSize: "11.5px", color: "#64748b", fontWeight: 500, display: "inline-flex", alignItems: "center", gap: "12px" }}>
-                  {isIndiaSelected && (
+                  {(isIndiaSelected || indiaEvents.some(isPending)) && (
                     <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
                       <span style={{ width: "10px", height: "10px", borderRadius: "3px", background: "#fef9c3", border: "1px solid #fde68a" }} />
                       Awaiting approval
@@ -1084,7 +1289,13 @@ export function AdvertisementView({ mode = "dashboard" }: { mode?: "dashboard" |
                     <span style={{ width: "10px", height: "10px", borderRadius: "3px", background: "#e2e8f0", border: "1px solid #cbd5e1" }} />
                     Completed
                   </span>
-                  <span>Selected: <b style={{ color: "#0f172a" }}>{selectedDateStr}</b></span>
+                  {!isIndiaSelected && (
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                      <span style={{ width: "10px", height: "10px", borderRadius: "3px", background: "#eff6ff", border: "1px dashed #93c5fd" }} />
+                      All-India
+                    </span>
+                  )}
+                  <span title="Drag across days to select several">Selected: <b style={{ color: "#0f172a" }}>{selectedLabel}</b></span>
                 </span>
               </div>
 
@@ -1099,13 +1310,14 @@ export function AdvertisementView({ mode = "dashboard" }: { mode?: "dashboard" |
               <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gridAutoRows: "minmax(0, 1fr)", gap: "5px", flex: 1, minHeight: 0 }}>
                 {calendarDays.map((cell, idx) => {
                   const inMonth = !!cell.dateStr;
-                  const selected = inMonth && cell.dateStr === selectedDateStr;
+                  const selected = inMonth && cell.dateStr >= selectedDateStr && cell.dateStr <= rangeTo;
                   const isToday = cell.dateStr === todayIso;
                   const cellDone = cell.events.length > 0 && cell.events.every((ev) => isCompleted(ev, todayIso));
                   return (
                     <div
                       key={idx}
-                      onClick={() => inMonth && setSelectedDateStr(cell.dateStr)}
+                      onMouseDown={(e) => { if (inMonth && e.button === 0) { e.preventDefault(); pickDay(cell.dateStr); } }}
+                      onMouseEnter={() => inMonth && dragOver(cell.dateStr)}
                       style={{
                         minWidth: 0, overflow: "hidden", boxSizing: "border-box", borderRadius: "8px", padding: "4px 6px",
                         display: "flex", flexDirection: "column", gap: "2px",
@@ -1123,6 +1335,21 @@ export function AdvertisementView({ mode = "dashboard" }: { mode?: "dashboard" |
                           </span>
                         )}
                       </span>
+                      {cell.india.map((ev) => (
+                        <span
+                          key={`in-${ev.id}`}
+                          title={`${ev.title} · All-India festival${isPending(ev) ? " · awaiting approval" : ""} (managed in the All-India calendar)`}
+                          style={{
+                            display: "flex", alignItems: "center", gap: "3px",
+                            background: isCompleted(ev, todayIso) ? "#f1f5f9" : isPending(ev) ? "#fef9c3" : "#eff6ff",
+                            color: isCompleted(ev, todayIso) ? "#64748b" : isPending(ev) ? "#a16207" : "#1d4ed8",
+                            border: isPending(ev) ? "1px dashed #facc15" : "1px dashed #93c5fd", borderRadius: "4px", padding: "2px 5px", fontSize: "10px", fontWeight: 600, lineHeight: 1.2,
+                            whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+                        >
+                          <Globe size={9} style={{ flexShrink: 0 }} />
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{ev.title}</span>
+                        </span>
+                      ))}
                       {cell.events.map((ev) => {
                         const done = isCompleted(ev, todayIso);
                         return (
@@ -1151,21 +1378,58 @@ export function AdvertisementView({ mode = "dashboard" }: { mode?: "dashboard" |
                   <Sparkles size={16} style={{ color: "#d97706" }} />
                   <div>
                     <h3 style={{ margin: 0, fontSize: "14px", fontWeight: 700, display: "flex", alignItems: "center", gap: "8px" }}>
-                      {(showPoster || dayCompleted) && dayEvent ? dayEvent.title : "Register Festival"}
+                      {selIndia ? selIndia.title : (showPoster || dayCompleted) && dayEvent ? dayEvent.title : "Register Festival"}
                       {dayCompleted && (
                         <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "11px", fontWeight: 700, color: "#475569", background: "#e2e8f0", borderRadius: "999px", padding: "2px 9px" }}>
                           <CheckCircle2 size={11} /> Completed
                         </span>
                       )}
                     </h3>
-                    <span style={{ fontSize: "11.5px", color: "#64748b", fontWeight: 500 }}>{regionLabel} · {dayCompleted ? "festival is over · poster kept for reference" : showPoster ? "poster and offer" : "festival for this day"}</span>
+                    <span style={{ fontSize: "11.5px", color: "#64748b", fontWeight: 500 }}>{selIndia ? `All-India festival · view only in ${regionLabel}` : `${regionLabel} · ${dayCompleted ? "festival is over · poster kept for reference" : showPoster ? "poster and offer" : "festival for this day"}`}</span>
                   </div>
                 </div>
                 <span style={{ background: "#f8fafc", border: "1px solid #e2e8f0", fontWeight: 650, fontSize: "11.5px", padding: "3px 10px", borderRadius: "12px", whiteSpace: "nowrap" }}>
-                  {selectedDateStr}
+                  {selectedLabel}
                 </span>
               </div>
-              {showPoster && dayEvent ? (
+              {formMode === "closed" && focusEvent && !isPending(focusEvent) && (
+                <div role="tablist" style={{ display: "flex", gap: "6px", marginBottom: "10px", flexShrink: 0 }}>
+                  {([["poster", "Poster"], ["message", "WhatsApp message"]] as const).map(([key, label]) => (
+                    <button key={key} type="button" role="tab" aria-selected={panelTab === key} onClick={() => setPanelTab(key)}
+                      style={{ ...btnLight, padding: "5px 12px", fontSize: "12px",
+                        ...(panelTab === key ? { background: "#0f172a", color: "#ffffff", border: "1px solid #0f172a" } : {}) }}>
+                      {key === "poster" ? <ImageIcon size={12} /> : <Send size={12} />}
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {formMode === "closed" && focusEvent && !isPending(focusEvent) && panelTab === "message" ? (
+                <div style={{ flex: 1, minHeight: 0, overflowY: "auto", paddingRight: "2px" }}>
+                  <FestivalMessagePanel
+                    region={isIndiaSelected ? "All-India" : selectedCity}
+                    eventId={focusEvent.id}
+                    year={calYear}
+                    month={calMonth + 1}
+                    onOpenIndia={() => navigate(`${regionCalendarPath("All-India")}?date=${selectedDateStr}`)}
+                    hasPoster={!!focusEvent.poster_url}
+                  />
+                </div>
+              ) : selIndia && selIndia.poster_url && formMode === "closed" ? (
+                <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.15fr) minmax(0, 1fr)", gap: "14px", flex: 1, minHeight: 0 }}>
+                  <div style={{ minHeight: 0, minWidth: 0 }}>
+                    <FestivalPosterCard
+                      event={selIndia}
+                      selectedCity={regionLabel}
+                      selectedDateStr={selectedDateStr}
+                      fill
+                      readOnly
+                      completed={isCompleted(selIndia, todayIso)}
+                    />
+                  </div>
+                  <div style={{ minHeight: 0, minWidth: 0, overflowY: "auto", paddingRight: "2px" }}>{dayPanel}</div>
+                </div>
+              ) : showPoster && dayEvent ? (
                 <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.15fr) minmax(0, 1fr)", gap: "14px", flex: 1, minHeight: 0 }}>
                   <div style={{ minHeight: 0, minWidth: 0 }}>
                     <FestivalPosterCard

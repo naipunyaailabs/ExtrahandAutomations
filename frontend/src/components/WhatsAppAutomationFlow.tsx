@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
+import { useCachedState } from "../hooks";
 import { AnimatedNumber } from "./motion";
 import { ChannelActiveButton } from "./WhatsAppChannelToggle";
 import type { Helper, Ticket as TicketType, WhatsAppFlow, WhatsAppStatus } from "../types";
@@ -44,7 +45,7 @@ export function WhatsAppAutomationFlow({
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
 
   // Today's real numbers from the backend (real-customer orders live from ExtraHand + the WhatsApp dispatch log)
-  const [flow, setFlow] = useState<WhatsAppFlow | null>(null);
+  const [flow, setFlow] = useCachedState<WhatsAppFlow>("whatsapp-flow");
   useEffect(() => {
     let stop = false;
     const load = () =>

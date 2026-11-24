@@ -1,9 +1,9 @@
-import { Check, CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Loader2, Pencil, Plus, RotateCcw, Send, Sparkles, Ticket, X } from "lucide-react";
+import { Check, CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Globe, Loader2, Lock, MapPin, Pencil, Plus, RotateCcw, Search, Send, Sparkles, Ticket, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { ErrorNote, SkeletonRows, useToast } from "../components/ui";
 import { usePoll, useUrlState } from "../hooks";
-import type { SeedFestivalCalendar, SeedFestivalDay, SeedTemplateLanguage, SeedTemplateView } from "../types";
+import type { CitySummary, SeedFestivalCalendar, SeedFestivalDay, SeedTemplateLanguage, SeedTemplateView } from "../types";
 
 type Lang = "te" | "hi" | "en";
 const LANGS: { key: Lang; label: string }[] = [
@@ -24,7 +24,78 @@ const nice = (s: string) => parse(s).toLocaleDateString("en-IN", { day: "numeric
 
 /* ============================================================================================== calendar */
 
+/* ============================================================================================== regions */
+
+const isNationalRegion = (c: CitySummary) => c.is_national || c.region_type === "national";
+const isIndiaName = (r: string) => /^(all[- ]?india|india|national)$/i.test(r.trim());
+
+/** Festival Calendar: first All-India and the city cards (like Advertisement > States & Cities), then the
+ * calendar of the region picked. A city calendar shows the city's own festivals plus the All-India dates. */
 export function FestivalCalendar() {
+  const [region, setRegion] = useUrlState<string>("region", "", { push: true });
+  return region
+    ? <RegionFestivalCalendar region={region} onBack={() => setRegion("")} onOpenRegion={setRegion} />
+    : <RegionCards onOpen={setRegion} />;
+}
+
+function RegionCards({ onOpen }: { onOpen: (name: string) => void }) {
+  const cities = usePoll<CitySummary[]>(api.advestiment.cities, 60000);
+  const [q, setQ] = useState("");
+  const groups = useMemo(() => {
+    const all = cities.data ?? [];
+    const term = q.trim().toLowerCase();
+    const match = (c: CitySummary) => !term || c.city_name.toLowerCase().includes(term) || (c.state || "").toLowerCase().includes(term);
+    const out: { title: string; sub: string; items: CitySummary[] }[] = [];
+    const national = all.filter((c) => isNationalRegion(c) && match(c));
+    if (national.length) out.push({ title: "India", sub: "National festivals: shown in every city calendar", items: national });
+    const byState = new Map<string, CitySummary[]>();
+    all.filter((c) => !isNationalRegion(c) && match(c))
+      .forEach((c) => byState.set(c.state || "Other", [...(byState.get(c.state || "Other") ?? []), c]));
+    [...byState.entries()].sort(([a], [b]) => a.localeCompare(b)).forEach(([state, items]) =>
+      out.push({ title: state, sub: `${items.length} ${items.length === 1 ? "city" : "cities"}`, items: [...items].sort((a, b) => a.city_name.localeCompare(b.city_name)) }));
+    return out;
+  }, [cities.data, q]);
+  const nationalCount = (cities.data ?? []).find(isNationalRegion)?.upcoming_events_count ?? 0;
+
+  return (
+    <section className="tsd-panel">
+      <div className="tsd-panel-head">
+        <span className="tsd-aside">Pick a region. Each city calendar shows its own festivals plus the All-India dates.</span>
+        <label className="tsd-region-search">
+          <Search size={13} />
+          <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search city or state" aria-label="Search cities and states" />
+        </label>
+      </div>
+      <ErrorNote error={cities.error} />
+      {!cities.data ? <SkeletonRows rows={4} /> : groups.length === 0 ? (
+        <p className="tsd-mini">No city or state matches "{q}".</p>
+      ) : groups.map((g) => (
+        <div key={g.title} className="tsd-region-group">
+          <div className="tsd-region-group-head"><b>{g.title}</b><span>{g.sub}</span></div>
+          <div className="tsd-region-grid">
+            {g.items.map((c) => {
+              const national = isNationalRegion(c);
+              return (
+                <button key={c.city_name} type="button" className={`tsd-region-card ${national ? "national" : ""}`} onClick={() => onOpen(national ? "All-India" : c.city_name)}>
+                  <span className="tsd-region-name">
+                    {national ? <Globe size={14} /> : <MapPin size={14} />}
+                    <span title={c.city_name}>{national ? "All-India" : c.city_name}</span>
+                  </span>
+                  <span className="tsd-region-count">
+                    <CalendarDays size={12} /> <b>{national ? c.upcoming_events_count : c.upcoming_events_count + nationalCount}</b> upcoming
+                    {!national && nationalCount > 0 && <span className="tsd-region-india">· {nationalCount} All-India</span>}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function RegionFestivalCalendar({ region, onBack, onOpenRegion }: { region: string; onBack: () => void; onOpenRegion: (name: string) => void }) {
   const now = new Date();
   const [monthParam, setMonthParam] = useUrlState<string>("month", "");
   const ym = /^\d{4}-\d{2}$/.test(monthParam)
@@ -34,7 +105,9 @@ export function FestivalCalendar() {
     const v = typeof next === "function" ? next(ym) : next;
     setMonthParam(`${v.y}-${String(v.m).padStart(2, "0")}`);
   };
-  const cal = usePoll<SeedFestivalCalendar>(() => api.marketing.seeding.festivals(ym.y, ym.m), 60000, [ym.y, ym.m]);
+  const cal = usePoll<SeedFestivalCalendar>(() => api.marketing.seeding.festivals(ym.y, ym.m, region), 60000, [ym.y, ym.m, region]);
+  const isIndia = isIndiaName(region);
+  const regionLabel = isIndia ? "All-India" : (cal.data?.region || region.trim());
   const c = cal.data && cal.data.year === ym.y && cal.data.month === ym.m ? cal.data : null;
   const [selId, setSelId] = useState<string | null>(null);
   const sel = c?.festivals.find((f) => f.id === selId) ?? null;
@@ -43,7 +116,10 @@ export function FestivalCalendar() {
   useEffect(() => {
     if (!c) return;
     if (selId && c.festivals.some((f) => f.id === selId)) return;
-    const next = c.festivals.find((f) => !f.past && f.enabled) ?? c.festivals.find((f) => !f.past) ?? c.festivals[0];
+    // a city's own festival first; the All-India ones are read-only here
+    const own = c.festivals.filter((f) => !f.inherited);
+    const next = own.find((f) => !f.past && f.enabled) ?? own.find((f) => !f.past)
+      ?? c.festivals.find((f) => !f.past && f.enabled) ?? c.festivals.find((f) => !f.past) ?? c.festivals[0];
     setSelId(next?.id ?? null);
   }, [c, selId]);
 
@@ -84,9 +160,12 @@ export function FestivalCalendar() {
   return (
     <section className="tsd-panel tsd-cal-wrap">
       <div className="tsd-panel-head">
-        <div>
+        <div className="tsd-region-title">
+          <button type="button" className="tsd-region-back" onClick={onBack} title="All regions" aria-label="Back to all regions"><ChevronLeft size={15} /></button>
+          {isIndia ? <Globe size={15} /> : <MapPin size={15} />}
+          <b>{regionLabel} Festival Calendar</b>
           <span className="tsd-aside">
-            Festivals already registered in the Advertisement festival list · {counts.sending} of {counts.total} this month send a message
+            {isIndia ? "National festivals" : "City festivals + All-India dates"} · {counts.sending} of {counts.total} this month send a message
           </span>
         </div>
         <div className="tsd-cal-nav">
@@ -105,6 +184,7 @@ export function FestivalCalendar() {
             <span><i className="tsd-lg-on" /> Sends a message</span>
             <span><i className="tsd-lg-off" /> No message</span>
             <span><i className="tsd-lg-win" /> Days the selected festival's message is sent</span>
+            {!isIndia && <span><Globe size={11} /> All-India date (read-only here)</span>}
           </div>
           <div className="tsd-cal-grid">
             {WEEK.map((w) => <div key={w} className="tsd-cal-wd">{w}</div>)}
@@ -119,9 +199,9 @@ export function FestivalCalendar() {
                 <div key={key} className={cls}>
                   <span className="tsd-cal-num">{d.getDate()}</span>
                   {list.slice(0, 3).map((f) => (
-                    <button key={f.id} type="button" title={`${f.title} · ${f.region}`}
-                      className={`tsd-cal-ev ${f.enabled ? "on" : "off"} ${f.id === selId ? "picked" : ""}`} onClick={() => setSelId(f.id)}>
-                      {f.customised && <Sparkles size={10} />}
+                    <button key={f.id} type="button" title={`${f.title} · ${f.inherited ? "All-India" : f.region}`}
+                      className={`tsd-cal-ev ${f.enabled ? "on" : "off"} ${f.inherited ? "inherited" : ""} ${f.id === selId ? "picked" : ""}`} onClick={() => setSelId(f.id)}>
+                      {f.inherited ? <Globe size={10} /> : f.customised && <Sparkles size={10} />}
                       <span>{f.title}</span>
                     </button>
                   ))}
@@ -131,12 +211,14 @@ export function FestivalCalendar() {
             })}
           </div>
           {c && c.festivals.length === 0 && (
-            <p className="tsd-mini"><CalendarDays size={12} /> No festival is registered for {MONTHS[ym.m - 1]}. Add festivals in Advertisement → States & Cities.</p>
+            <p className="tsd-mini"><CalendarDays size={12} /> No festival is registered for {regionLabel} in {MONTHS[ym.m - 1]}. Add festivals in Advertisement → States & Cities.</p>
           )}
         </div>
 
         <aside className="tsd-side-slot">
-          {c && sel ? (
+          {c && sel && sel.inherited ? (
+            <InheritedFestival key={sel.id} f={sel} cal={c} region={regionLabel} onOpenIndia={() => onOpenRegion("All-India")} />
+          ) : c && sel ? (
             <FestivalTemplate key={sel.id} f={sel} cal={c} onSaved={cal.refresh} onDraft={setDraft} />
           ) : (
             <div className="tsd-side tsd-side-empty"><CalendarDays size={22} /> Pick a festival in the calendar to set the message sent for it.</div>
@@ -148,6 +230,31 @@ export function FestivalCalendar() {
 }
 
 /* ============================================================================================== side panel */
+
+/** An All-India festival opened from a city calendar: what is sent, read-only (set in the All-India calendar). */
+function InheritedFestival({ f, cal, region, onOpenIndia }: { f: SeedFestivalDay; cal: SeedFestivalCalendar; region: string; onOpenIndia: () => void }) {
+  const names = f.services.map((k) => cal.services.find((s) => s.key === k)?.name).filter(Boolean);
+  const range = f.date_end && f.date_end !== f.date_start ? `${nice(f.date_start)} - ${nice(f.date_end)}` : nice(f.date_start);
+  return (
+    <div className="tsd-side tsd-side-inherited">
+      <div className="tsd-inherited-head">
+        <Globe size={16} />
+        <div>
+          <b>{f.title}</b>
+          <span>All-India festival · {range}</span>
+        </div>
+      </div>
+      <p className="tsd-mini"><Lock size={12} /> Shown in {region} because it is an All-India date. Its message is set in the All-India calendar, so it is read-only here.</p>
+      <dl className="tsd-inherited-facts">
+        <dt>Message</dt><dd>{f.enabled ? "Sent" : "Not sent"}</dd>
+        <dt>Sends</dt><dd>{f.enabled ? `${nice(f.sends_from)} - ${nice(f.sends_until)}` : "-"}</dd>
+        <dt>Services</dt><dd>{names.length ? names.join(", ") : "-"}</dd>
+        <dt>Coupon</dt><dd>{f.promo_code || "-"}</dd>
+      </dl>
+      <button type="button" className="tsd-inherited-open" onClick={onOpenIndia}><Globe size={13} /> Open the All-India calendar</button>
+    </div>
+  );
+}
 
 function FestivalTemplate({ f, cal, onSaved, onDraft }: {
   f: SeedFestivalDay; cal: SeedFestivalCalendar; onSaved: () => void;
@@ -582,5 +689,155 @@ function TemplateEditor({ lang, setLang, fallback, fill }: {
       </div>
       <small className="tsd-side-hint">One template for every festival, in Telugu, Hindi and English. Customers get it only after Meta approves it.</small>
     </div>
+  );
+}
+
+/* ============================================================================================== embedded in Advertisement */
+
+/** The Task-Seeding WhatsApp message of one festival, shown in the Advertisement region calendar beside its
+ * poster: editable for the region's own festivals (with the Meta template); an All-India festival opened from
+ * a city is read-only (its message is set in the All-India calendar). */
+export function FestivalMessagePanel({ region, eventId, year, month, onOpenIndia, hasPoster = false }: {
+  region: string; eventId: string; year: number; month: number; onOpenIndia: () => void;
+  /** the festival has a poster: it is sent as an image template (once Meta approves that template) */
+  hasPoster?: boolean;
+}) {
+  const cal = usePoll<SeedFestivalCalendar>(() => api.marketing.seeding.festivals(year, month, region), 60000, [year, month, region]);
+  const c = cal.data && cal.data.year === year && cal.data.month === month ? cal.data : null;
+  const f = c?.festivals.find((x) => x.id === eventId) ?? null;
+  if (cal.error && !c) return <ErrorNote error={cal.error} />;
+  if (!c) return <SkeletonRows rows={5} />;
+  if (!f) return <p className="tsd-mini"><CalendarDays size={12} /> This festival is not in the Task Seeding list yet.</p>;
+  return (
+    <div className="tsd-embed">
+      {!c.festival_campaigns && <p className="tsd-mini tsd-warn">Festival campaigns are switched off in Task Seeding settings: this message is not sent until it is on.</p>}
+      {f.inherited
+        ? <InheritedFestival f={f} cal={c} region={c.region || region} onOpenIndia={onOpenIndia} />
+        : <SimpleFestivalMessage key={f.id} f={f} cal={c} onSaved={cal.refresh} hasPoster={hasPoster} />}
+    </div>
+  );
+}
+
+/** WhatsApp tab of the Advertisement calendar: one text box and one button. The button saves the text and sends
+ * the WhatsApp template to Meta, and shows Meta's answer in its place (In review, Approved, Rejected). */
+function SimpleFestivalMessage({ f, cal, onSaved, hasPoster }: { f: SeedFestivalDay; cal: SeedFestivalCalendar; onSaved: () => void; hasPoster: boolean }) {
+  const toast = useToast();
+  const initial = f.hooks.te || f.hooks.en || f.hooks.hi || "";
+  const [text, setText] = useState(initial);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => setText(f.hooks.te || f.hooks.en || f.hooks.hi || ""), [f]);
+  const tpl = usePoll<SeedTemplateView>(() => api.marketing.seeding.template(), 30000);
+
+  const langs = tpl.data?.languages ?? [];
+  const needsSend = (x: SeedTemplateLanguage) => x.meta.status === "NOT_SUBMITTED" || x.meta.status === "REJECTED"
+    || (x.meta.changed && x.meta.status !== "PENDING");
+  const toSend = langs.filter(needsSend);
+  const rejected = langs.find((x) => x.meta.status === "REJECTED");
+  const inReview = langs.some((x) => x.meta.status === "PENDING");
+  const approved = langs.length > 0 && langs.every((x) => x.meta.status === "APPROVED" && !x.meta.changed);
+  const dirty = !f.enabled || LANGS.some((l) => (f.hooks[l.key] || "") !== text.trim());
+
+  const label = busy ? "Sending…"
+    : !tpl.data ? "Checking Meta…"
+    : dirty && approved ? "Save message"
+    : dirty || toSend.length ? (rejected ? "Rejected · Send again" : "Send to Meta")
+    : inReview ? "In review at Meta"
+    : approved ? "Approved by Meta"
+    : "Send to Meta";
+  const tone = approved && !dirty ? "ok" : inReview && !dirty && !toSend.length ? "wait" : rejected ? "bad" : "go";
+  const disabled = busy || !tpl.data || !text.trim() || (!dirty && !toSend.length);
+
+  const go = async () => {
+    setBusy(true);
+    try {
+      if (dirty) {
+        // the message names a service ({{3}}): the festival's own, else its suggestion, else the first one
+        const service = f.services[0] || f.suggested_service || cal.services[0]?.key;
+        if (!service) throw new Error("Add a service in Task Seeding first.");
+        const t = text.trim();
+        await api.marketing.seeding.saveFestival(f.id, {
+          enabled: true, services: f.services.length ? f.services : [service], promo_code: f.promo_code,
+          hooks: { te: t, hi: t, en: t }, send_from: f.sends_from, send_until: f.sends_until,
+        });
+      }
+      for (const x of toSend) {
+        const res = await api.marketing.seeding.submitTemplate(x.language);
+        const r = res.results[x.language];
+        if (!r?.ok) throw new Error(`Meta did not accept the ${x.language_name} template: ${r?.error ?? "unknown error"}`);
+      }
+      toast.success(toSend.length ? "Sent to Meta" : "Message saved",
+        toSend.length ? "Meta usually reviews it within minutes to a day." : "The template is already approved by Meta.");
+      await Promise.all([onSaved(), tpl.refresh()]);
+    } catch (e) {
+      toast.error("Could not send", (e as Error).message);
+      await tpl.refresh();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="tsd-side tsd-simple">
+      <div className="tsd-side-head">
+        <span className="tsd-side-date">
+          <b>{parse(f.date_start).getDate()}</b>
+          <small>{MONTHS[parse(f.date_start).getMonth()].slice(0, 3)}</small>
+        </span>
+        <div>
+          <h3>{f.title}</h3>
+          <small>{f.region} · {f.date_end && f.date_end !== f.date_start ? `${nice(f.date_start)} - ${nice(f.date_end)}` : nice(f.date_start)}</small>
+        </div>
+      </div>
+      <textarea className="tsd-input" rows={4} maxLength={200} value={text} placeholder="Type the WhatsApp message for this festival"
+        onChange={(e) => setText(e.target.value.replace(/\n/g, " "))} />
+      <button type="button" className={`tsd-meta-btn tsd-meta-${tone}`} onClick={go} disabled={disabled}>
+        {busy || !tpl.data ? <Loader2 size={15} className="animate-spin" /> : approved && !dirty ? <CheckCircle2 size={15} /> : <Send size={15} />}
+        {label}
+      </button>
+      {rejected?.meta.rejected_reason && <small className="tsd-t-bad">Meta's reason: {rejected.meta.rejected_reason}</small>}
+      {hasPoster && <PosterTemplateButton />}
+      <ErrorNote error={tpl.error} />
+    </div>
+  );
+}
+
+/** The poster template (festival poster on top of the same message): one button that sends it to Meta and then
+ * shows Meta's answer. Until it is approved, festivals with a poster are sent as the text message. */
+function PosterTemplateButton() {
+  const toast = useToast();
+  const st = usePoll(() => api.marketing.festivalWhatsApp.status(), 30000);
+  const [busy, setBusy] = useState(false);
+  const vs = st.data?.poster_template ?? [];
+  const rejected = vs.find((v) => v.status === "REJECTED");
+  const approved = vs.length > 0 && vs.every((v) => v.status === "APPROVED");
+  const inReview = vs.some((v) => v.status === "PENDING");
+  const missing = vs.length < 3;
+  const label = busy ? "Sending…" : !st.data ? "Checking Meta…" : approved && !missing ? "Poster template approved by Meta"
+    : rejected ? "Poster template rejected · Send again" : inReview && !missing ? "Poster template in review at Meta" : "Send poster template to Meta";
+  const tone = approved && !missing ? "ok" : inReview && !missing ? "wait" : rejected ? "bad" : "go";
+  const canSend = !busy && !!st.data && (missing || !!rejected);
+  const go = async () => {
+    setBusy(true);
+    try {
+      const res = await api.marketing.festivalWhatsApp.submitPosterTemplate();
+      const bad = Object.entries(res.results).find(([, r]) => !r.ok);
+      if (bad) toast.error("Meta did not accept it", bad[1].error ?? "Unknown error");
+      else toast.success("Poster template sent to Meta", "Meta usually reviews it within minutes to a day.");
+      await st.refresh();
+    } catch (e) {
+      toast.error("Could not send", (e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <button type="button" className={`tsd-meta-btn tsd-meta-${tone} tsd-meta-sm`} onClick={go} disabled={!canSend}>
+        {busy || !st.data ? <Loader2 size={14} className="animate-spin" /> : approved && !missing ? <CheckCircle2 size={14} /> : <Send size={14} />}
+        {label}
+      </button>
+      <small className="tsd-side-hint">With the poster on top. Until Meta approves it, this festival goes out as the text message.</small>
+      {rejected?.rejected_reason && <small className="tsd-t-bad">Meta's reason: {rejected.rejected_reason}</small>}
+    </>
   );
 }

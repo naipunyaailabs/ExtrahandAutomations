@@ -23,6 +23,8 @@ export interface FestivalPosterCardProps {
   fill?: boolean;
   /** The festival is over: keep the poster for reference, no regenerate and no offer to copy. */
   completed?: boolean;
+  /** View only (an All-India poster shown in a city calendar): download and copy, no regenerate. */
+  readOnly?: boolean;
 }
 
 interface PosterDesign {
@@ -72,6 +74,7 @@ export function FestivalPosterCard({
   compact = false,
   fill = false,
   completed = false,
+  readOnly = false,
 }: FestivalPosterCardProps) {
   const toast = useToast();
   const branding = useBranding();
@@ -181,8 +184,8 @@ export function FestivalPosterCard({
           Download Poster
         </button>
       ) : fill ? (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "8px", flexShrink: 0 }}>
-          <button
+        <div style={{ display: "grid", gridTemplateColumns: `repeat(${readOnly ? 2 : 3}, minmax(0, 1fr))`, gap: "8px", flexShrink: 0 }}>
+          {!readOnly && (<button
         type="button"
         onClick={() => {
           if (!event?.id) {
@@ -196,7 +199,7 @@ export function FestivalPosterCard({
       >
         <RefreshCw size={12} />
         {fill ? "Regenerate" : "Regenerate Poster"}
-      </button>
+      </button>)}
           <button type="button" onClick={download} disabled={!posterUrl || failed}
           style={{ ...btn, background: "#0f172a", color: "#ffffff", border: "1px solid #334155" }}
           title="Download the finished poster (JPG)">
@@ -213,7 +216,7 @@ export function FestivalPosterCard({
         </div>
       ) : (
         <>
-          <button
+          {!readOnly && (<button
         type="button"
         onClick={() => {
           if (!event?.id) {
@@ -227,7 +230,7 @@ export function FestivalPosterCard({
       >
         <RefreshCw size={12} />
         {fill ? "Regenerate" : "Regenerate Poster"}
-      </button>
+      </button>)}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
             <button type="button" onClick={download} disabled={!posterUrl || failed}
           style={{ ...btn, background: "#0f172a", color: "#ffffff", border: "1px solid #334155" }}
