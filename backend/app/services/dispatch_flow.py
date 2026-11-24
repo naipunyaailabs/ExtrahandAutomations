@@ -53,7 +53,9 @@ def real_customer_ticket_ids(db: Session) -> set[str]:
 
 
 def _is_assigned(o: Dict[str, Any]) -> bool:
-    return bool(o.get("helper_name")) or o["status"].lower() in ASSIGNED_STATUSES
+    """A helper is linked (by id, same rule as the task list) or the status says so. A helper name typed on the
+    Work without a linked helper is not an assignment."""
+    return bool(o.get("helper_id")) or o["status"].lower() in ASSIGNED_STATUSES
 
 
 def _progress(rows: List[Dict[str, Any]]) -> Dict[str, int]:

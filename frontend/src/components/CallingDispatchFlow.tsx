@@ -29,6 +29,26 @@ export interface CallingDispatchFlowProps {
   compact?: boolean;
 }
 
+/** "+3  −1 cancelled  = 2 active": everything that came in, what was cancelled after, and what is left.
+ * The minus part only shows when something was cancelled. */
+function PlusMinus({ added, cancelled, what }: { added: number; cancelled: number; what: string }) {
+  const left = Math.max(added - cancelled, 0);
+  return (
+    <div
+      className="node-plus-minus"
+      title={`${added} ${what}${cancelled ? `, ${cancelled} of them cancelled later, ${left} still active` : ""}`}
+    >
+      <span className="pm-plus">+{added}</span>
+      {cancelled > 0 && (
+        <>
+          <span className="pm-minus">−{cancelled} cancelled</span>
+          <span className="pm-net">= {left} active</span>
+        </>
+      )}
+    </div>
+  );
+}
+
 /**
  * Animated Calling Agent Dispatch Lifecycle Flow Diagram
  * 
@@ -59,22 +79,21 @@ export function CallingDispatchFlow({
         .then((f) => !stop && setFlow(f))
         .catch(() => undefined);
     load();
-    const timer = setInterval(load, 60_000);
+    const timer = setInterval(load, 30_000);
     return () => {
       stop = true;
       clearInterval(timer);
     };
   }, [tickets, calls, stats, escalations]);
 
-  // "1 completed · 2 in progress · 1 cancelled" (only the parts that are not zero)
+  // "1 completed · 2 in progress" (only the parts that are not zero; cancelled is shown in the +/- line)
   const progressText = (p?: { completed: number; in_progress: number; cancelled: number }) => {
     if (!p) return "—";
     const parts = [
       p.completed ? `${p.completed} completed` : "",
       p.in_progress ? `${p.in_progress} in progress` : "",
-      p.cancelled ? `${p.cancelled} cancelled` : "",
     ].filter(Boolean);
-    return parts.join(" · ") || "none";
+    return parts.join(" · ") || (p.cancelled ? "all cancelled" : "none");
   };
 
   const metrics = useMemo(
@@ -88,6 +107,10 @@ export function CallingDispatchFlow({
       todayProgress: progressText(flow?.today_progress),
       assignedProgress: progressText(flow?.assigned_progress),
       unassignedProgress: progressText(flow?.unassigned_progress),
+      todayCancelled: flow?.today_progress?.cancelled ?? 0,
+      assignedCancelled: flow?.assigned_progress?.cancelled ?? 0,
+      unassignedCancelled: flow?.unassigned_progress?.cancelled ?? 0,
+      unassignedWaiting: flow?.unassigned_progress?.in_progress ?? 0,
       totalCallsCount: flow?.dispatch_calls_today ?? 0,
       callsToday: flow?.calls_today ?? 0,
       simulatedCalls: flow?.simulated_calls_today ?? 0,
@@ -288,7 +311,8 @@ export function CallingDispatchFlow({
                 <AnimatedNumber value={metrics.tasksTodayCount} />
               </div>
               <div className="node-name-primary">Tasks (Today)</div>
-              <div className="node-desc-sub">
+              <PlusMinus added={metrics.tasksTodayCount} cancelled={metrics.todayCancelled} what="booked" />
+              <div className="node-desc-sub" title={metrics.todayProgress}>
                 {metrics.todayProgress}
               </div>
               <div className="node-footer-hint">{metrics.sourceLabel}</div>
@@ -313,7 +337,8 @@ export function CallingDispatchFlow({
                 <AnimatedNumber value={metrics.assignedCount} />
               </div>
               <div className="node-name-primary">Helper Assigned</div>
-              <div className="node-desc-sub">{metrics.assignedProgress}</div>
+              <PlusMinus added={metrics.assignedCount} cancelled={metrics.assignedCancelled} what="assigned" />
+              <div className="node-desc-sub" title={metrics.assignedProgress}>{metrics.assignedProgress}</div>
               <div className="node-footer-hint direct">Direct ➔ Follow-up</div>
             </motion.div>
 
@@ -335,8 +360,13 @@ export function CallingDispatchFlow({
                 <AnimatedNumber value={metrics.unassignedCount} />
               </div>
               <div className="node-name-primary">Not Assigned</div>
-              <div className="node-desc-sub">{metrics.unassignedProgress}</div>
-              <div className="node-footer-hint amber">Queue for Voice IVR</div>
+              <PlusMinus added={metrics.unassignedCount} cancelled={metrics.unassignedCancelled} what="not assigned" />
+              <div className="node-desc-sub" title={metrics.unassignedProgress}>{metrics.unassignedProgress}</div>
+              <div className="node-footer-hint amber">
+                {metrics.unassignedWaiting
+                  ? `${metrics.unassignedWaiting} waiting · Queue for Voice IVR`
+                  : "Nothing waiting for Voice IVR"}
+              </div>
             </motion.div>
 
             {/* COLUMN 3: DIRECT ACTION & OUTREACH */}

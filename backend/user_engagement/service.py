@@ -244,6 +244,8 @@ def live_orders() -> Dict[str, Any]:
             "posted_by": t.get("postedBy") or "",
             "helper_name": t.get("assignedHelperName") or t.get("assigneeName") or "",
             "helper_key": _helper_key(t),
+            # a helper is really linked only with an id (a typed name alone is not an assignment)
+            "helper_id": str(t.get("assigneeId") or t.get("assigneeUid") or t.get("partnerId") or t.get("partnerUid") or ""),
             "customer_key": str(t.get("CustomerId") or t.get("customerId") or t.get("requesterId")
                                 or t.get("customerPhone") or ""),
             "created_day": created.astimezone(IST).date() if created else None,
@@ -302,6 +304,7 @@ def local_orders(db: Session) -> Dict[str, Any]:
             "posted_by": "",
             "helper_name": t.assignee_name or "",
             "helper_key": t.assignee_id or t.assignee_name or "",
+            "helper_id": t.assignee_id or "",
             "customer_key": t.customer_id or t.customer_phone or t.customer_name or "",
             "created_day": ist_day(booked_naive),
             "scheduled_day": ist_day(t.scheduled_at),
