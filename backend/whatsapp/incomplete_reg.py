@@ -130,6 +130,17 @@ def _state(db: Session) -> dict[str, Any]:
     }
 
 
+SENT_STATES = ("sent", "delivered", "read")
+MSG_FILTERS = ("all", "not_sent", "sent", "delivered", "read", "failed")
+
+
+def _msg_bucket(st: str | None) -> str:
+    """Groups a reminder status for the filters: sent / delivered / read / failed, anything else is not_sent."""
+    if st == "sending":
+        return "sent"
+    return st if st in SENT_STATES or st == "failed" else "not_sent"
+
+
 def _targeted(u: dict[str, Any]) -> bool:
     """Reminders go only to registered helpers and customers who have not added their location.
     Everyone else who is incomplete (KYC pending, role not chosen, only the name missing, ...) is left out."""
@@ -708,6 +719,7 @@ async def incomplete_dashboard(refresh: bool = False, db: Session = Depends(get_
         "ready_to_send": 0,
         "old_skipped": 0,
         "not_targeted": 0,
+        "no_location": 0,
         "no_phone": 0,
         "sent": 0,
         "delivered": 0,
@@ -719,6 +731,8 @@ async def incomplete_dashboard(refresh: bool = False, db: Session = Depends(get_
 
     for u in users:
         counts[f"{u['audience']}_incomplete"] += 1
+        if "Location" in u["missing"]:
+            counts["no_location"] += 1
         stages[u["stage"]] = stages.get(u["stage"], 0) + 1
         r = by_user.get((u["audience"], u["id"]))
         pkey = _phone_key(u.get("phone"))
@@ -808,6 +822,7 @@ def incomplete_users(
     audience: Literal["all", "helper", "customer"] = "all",
     stage: str = "all",
     status: str = "all",
+    location: Literal["all", "missing"] = "all",
     q: str = "",
     offset: int = 0,
     limit: int = 50,
@@ -832,13 +847,15 @@ def incomplete_users(
     counts = {
         "all": 0, "helper": 0, "customer": 0,
         "waiting_5h": 0, "ready": 0, "old_skipped": 0, "not_targeted": 0, "sent": 0, "delivered": 0, "read": 0, "failed": 0,
-        "simulated": 0, "no_phone": 0,
+        "simulated": 0, "no_phone": 0, "not_sent": 0,
     }
 
     for u in users:
         if audience != "all" and u["audience"] != audience:
             continue
         if stage != "all" and u["stage"] != stage:
+            continue
+        if location == "missing" and "Location" not in u["missing"]:
             continue
 
         r = by_user.get((u["audience"], u["id"]))
@@ -868,6 +885,8 @@ def incomplete_users(
             counts[msg_status] += 1
         if msg_status in ("delivered", "read"):
             counts["sent"] += 1
+        if _msg_bucket(msg_status) == "not_sent":
+            counts["not_sent"] += 1
 
         items.append({
             "user_id": u["id"],
@@ -888,6 +907,8 @@ def incomplete_users(
 
     if status == "sent":
         items = [x for x in items if x["msg_status"] in ("sent", "delivered", "read")]
+    elif status == "not_sent":
+        items = [x for x in items if _msg_bucket(x["msg_status"]) == "not_sent"]
     elif status != "all":
         items = [x for x in items if x["msg_status"] == status]
 
@@ -915,6 +936,7 @@ def incomplete_users(
 def completed_users(
     audience: Literal["all", "helper", "customer"] = "all",
     reminded: Literal["all", "yes", "no"] = "all",
+    status: Literal["all", "not_sent", "sent", "delivered", "read", "failed"] = "all",
     q: str = "",
     offset: int = 0,
     limit: int = 50,
@@ -929,20 +951,28 @@ def completed_users(
     ledger = _ledger(db)
     by_user = {(r.audience, r.user_id): r for r in rows}
 
-    counts = {"all": 0, "helper": 0, "customer": 0, "reminded": 0, "organic": 0}
+    counts = {"all": 0, "helper": 0, "customer": 0, "reminded": 0, "organic": 0, **{k: 0 for k in MSG_FILTERS[1:]}}
     items: list[dict[str, Any]] = []
     for c in completed:
         r = by_user.get((c["audience"], c["id"]))
         st = _delivery(r, ledger) if r else None
-        was_reminded = st in ("sent", "delivered", "read")
+        was_reminded = st in SENT_STATES
+        bucket = _msg_bucket(st)
         counts["all"] += 1
         counts[c["audience"]] += 1
-        counts["reminded" if was_reminded else "organic"] += 1
         if audience != "all" and c["audience"] != audience:
             continue
+        counts["reminded" if was_reminded else "organic"] += 1  # reminder / status counts follow the audience tab
+        counts[bucket] += 1
+        if bucket in ("delivered", "read"):
+            counts["sent"] += 1
         if reminded == "yes" and not was_reminded:
             continue
         if reminded == "no" and was_reminded:
+            continue
+        if status == "sent" and bucket not in SENT_STATES:
+            continue
+        if status not in ("all", "sent") and bucket != status:
             continue
         items.append({
             "user_id": c["id"],

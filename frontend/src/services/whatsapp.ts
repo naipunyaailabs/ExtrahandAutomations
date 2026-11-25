@@ -130,13 +130,13 @@ export function createWhatsAppService(
     welcomerCommercials: () => get<WaWelcomerCommercials>("/api/whatsapp/welcomer-commercials"),
     incompleteRegDashboard: (refresh = false) =>
       get<WaIncompleteDashboard>(`/api/whatsapp/incomplete-reg/dashboard${refresh ? "?refresh=true" : ""}`),
-    incompleteRegUsers: (params: { audience?: string; stage?: string; status?: string; q?: string; offset?: number; limit?: number; refresh?: boolean }) =>
+    incompleteRegUsers: (params: { audience?: string; stage?: string; status?: string; location?: string; q?: string; offset?: number; limit?: number; refresh?: boolean }) =>
       get<WaIncompleteUsersPage>(
         `/api/whatsapp/incomplete-reg/users?${new URLSearchParams(
           Object.entries(params).filter(([, v]) => v !== undefined && v !== "" && v !== false).map(([k, v]) => [k, String(v)]),
         )}`,
       ),
-    incompleteRegCompleted: (params: { audience?: string; reminded?: string; q?: string; offset?: number; limit?: number }) =>
+    incompleteRegCompleted: (params: { audience?: string; reminded?: string; status?: string; q?: string; offset?: number; limit?: number }) =>
       get<WaIncompleteCompletedPage>(
         `/api/whatsapp/incomplete-reg/completed?${new URLSearchParams(
           Object.entries(params).filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => [k, String(v)]),

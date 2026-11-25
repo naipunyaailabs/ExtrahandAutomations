@@ -2357,6 +2357,7 @@ export interface WaIncompleteDashboard {
     ready_to_send: number;
     old_skipped: number;
     not_targeted: number;
+    no_location: number;
     no_phone: number;
     sent: number;
     delivered: number;
@@ -2425,7 +2426,10 @@ export interface WaIncompleteCompletedItem {
 }
 
 export interface WaIncompleteCompletedPage {
-  counts: { all: number; helper: number; customer: number; reminded: number; organic: number };
+  counts: {
+    all: number; helper: number; customer: number; reminded: number; organic: number;
+    not_sent: number; sent: number; delivered: number; read: number; failed: number;
+  };
   total: number;
   offset: number;
   limit: number;

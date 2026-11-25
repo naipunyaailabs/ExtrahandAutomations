@@ -133,7 +133,19 @@ def test_only_users_without_location_get_a_reminder(client, db, fake):
     assert res["sent"] == 2
     statuses = {x["name"]: x["msg_status"] for x in client.get("/api/whatsapp/incomplete-reg/users").json()["items"]}
     assert statuses["Kyc Helper"] == statuses["Cats Helper"] == statuses["User"] == statuses["Kiran"] == "not_targeted"
-    assert client.get("/api/whatsapp/incomplete-reg/dashboard").json()["counts"]["not_targeted"] == 4
+    d = client.get("/api/whatsapp/incomplete-reg/dashboard").json()
+    assert d["counts"]["not_targeted"] == 4
+    assert d["counts"]["no_location"] == 2  # h_noloc, c_noloc (c_role has not chosen a role, so it is not counted)
+
+    # "No location" list, and message-status filters on it
+    noloc = client.get("/api/whatsapp/incomplete-reg/users", params={"location": "missing"}).json()
+    assert {x["name"] for x in noloc["items"]} == {"No Loc Helper", "Sita Devi"}
+    assert noloc["counts"]["sent"] == 2 and noloc["counts"]["not_sent"] == 0
+    assert client.get("/api/whatsapp/incomplete-reg/users", params={"location": "missing", "status": "not_sent"}).json()["total"] == 0
+    everyone = client.get("/api/whatsapp/incomplete-reg/users").json()
+    assert everyone["counts"]["not_sent"] == 4
+    not_sent = client.get("/api/whatsapp/incomplete-reg/users", params={"status": "not_sent"}).json()
+    assert {x["name"] for x in not_sent["items"]} == {"Kyc Helper", "Cats Helper", "User", "Kiran"}
 
 
 def test_detection_and_5_hour_rule_and_single_send(client, db, fake):
@@ -245,6 +257,11 @@ def test_dashboard_shows_completed_users(client, db, fake):
     assert "Test Account" not in names
     rem = client.get("/api/whatsapp/incomplete-reg/completed", params={"reminded": "yes"}).json()
     assert [x["name"] for x in rem["items"]] == ["Priya Sharma"] and rem["items"][0]["reminded"] is True
+    assert lst["counts"]["sent"] == 1 and lst["counts"]["not_sent"] == 3
+    by_status = client.get("/api/whatsapp/incomplete-reg/completed", params={"status": "sent"}).json()
+    assert [x["name"] for x in by_status["items"]] == ["Priya Sharma"]
+    assert client.get("/api/whatsapp/incomplete-reg/completed", params={"status": "not_sent"}).json()["total"] == 3
+    assert client.get("/api/whatsapp/incomplete-reg/completed", params={"status": "read"}).json()["total"] == 0
     helpers = client.get("/api/whatsapp/incomplete-reg/completed", params={"audience": "helper", "q": "done"}).json()
     assert helpers["total"] == 1 and helpers["items"][0]["phone"]
 

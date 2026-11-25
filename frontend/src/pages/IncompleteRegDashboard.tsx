@@ -10,6 +10,7 @@ import {
   HandHeart,
   Hourglass,
   Loader2,
+  MapPinOff,
   Phone,
   Play,
   RefreshCw,
@@ -27,7 +28,13 @@ import { api } from "../api";
 import { AnimatedNumber } from "../components/motion";
 import { ErrorNote, SkeletonRows, useToast } from "../components/ui";
 import { usePoll } from "../hooks";
-import type { WaAudience, WaIncompleteCompletedPage, WaIncompleteDashboard, WaIncompleteTemplateInfo } from "../types";
+import type {
+  WaAudience,
+  WaIncompleteCompletedPage,
+  WaIncompleteDashboard,
+  WaIncompleteTemplateInfo,
+  WaIncompleteUsersPage,
+} from "../types";
 import { AudienceBadge, fmtPhone, fmtWhen, IncompleteStatusPill } from "./incompleteRegShared";
 import "./wa-commercials.css";
 import "./wa-welcomers.css";
@@ -346,7 +353,7 @@ export function IncompleteRegDashboard() {
             </section>
           </div>
 
-          <CompletedUsersSection refreshKey={d.fetched_at} />
+          <UsersStatusSection refreshKey={d.fetched_at} totals={d.counts} />
 
           {/* Telugu Templates & Meta Setup + Test Send */}
           <section className="wx-sheet">
@@ -484,23 +491,35 @@ function Kpi({ icon: I, color, label, value, note }: { icon: typeof Users; color
   );
 }
 
-const COMPLETED_LIMIT = 25;
+const LIST_LIMIT = 25;
 
-const COMPLETED_AUDIENCES = [
+type ListGroup = "completed" | "incomplete" | "no_location";
+type MsgFilter = "all" | "not_sent" | "sent" | "delivered" | "read" | "failed";
+
+const LIST_AUDIENCES = [
   { key: "all", label: "All" },
   { key: "helper", label: "Helpers" },
   { key: "customer", label: "Customers" },
 ] as const;
 
-const COMPLETED_FILTERS = [
-  { key: "all", label: "All", count: "all" },
-  { key: "yes", label: "Completed after reminder", count: "reminded" },
-  { key: "no", label: "Completed on their own", count: "organic" },
-] as const;
+const MSG_FILTERS: { key: MsgFilter; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "not_sent", label: "Not sent" },
+  { key: "sent", label: "Sent" },
+  { key: "delivered", label: "Delivered" },
+  { key: "read", label: "Read" },
+  { key: "failed", label: "Failed" },
+];
 
-function CompletedUsersSection({ refreshKey }: { refreshKey: string | null }) {
+type ListResult =
+  | { kind: "completed"; page: WaIncompleteCompletedPage }
+  | { kind: "incomplete"; page: WaIncompleteUsersPage };
+
+/** One table for Completed, Incomplete and No-location users, filtered by role and by our WhatsApp message status. */
+function UsersStatusSection({ refreshKey, totals }: { refreshKey: string | null; totals: WaIncompleteDashboard["counts"] }) {
+  const [group, setGroup] = useState<ListGroup>("completed");
   const [audience, setAudience] = useState<"all" | "helper" | "customer">("all");
-  const [reminded, setReminded] = useState<"all" | "yes" | "no">("all");
+  const [status, setStatus] = useState<MsgFilter>("all");
   const [draft, setDraft] = useState("");
   const [q, setQ] = useState("");
   const [offset, setOffset] = useState(0);
@@ -509,42 +528,65 @@ function CompletedUsersSection({ refreshKey }: { refreshKey: string | null }) {
     const t = setTimeout(() => setQ(draft.trim()), 300);
     return () => clearTimeout(t);
   }, [draft]);
-  useEffect(() => setOffset(0), [audience, reminded, q]);
+  useEffect(() => setOffset(0), [group, audience, status, q]);
 
-  const data = usePoll<WaIncompleteCompletedPage>(
-    () => api.whatsapp.incompleteRegCompleted({ audience, reminded, q, offset, limit: COMPLETED_LIMIT }),
+  const data = usePoll<ListResult>(
+    async () =>
+      group === "completed"
+        ? { kind: "completed", page: await api.whatsapp.incompleteRegCompleted({ audience, status, q, offset, limit: LIST_LIMIT }) }
+        : {
+            kind: "incomplete",
+            page: await api.whatsapp.incompleteRegUsers({
+              audience, status, q, offset, limit: LIST_LIMIT, location: group === "no_location" ? "missing" : undefined,
+            }),
+          },
     30000,
-    [audience, reminded, q, offset, refreshKey],
+    [group, audience, status, q, offset, refreshKey],
   );
-  const r = data.data;
-  const c = r?.counts;
+  const res = data.data && data.data.kind === (group === "completed" ? "completed" : "incomplete") ? data.data : null;
+  const page = res?.page;
+  const c = page?.counts as Record<string, number> | undefined;
+  const statusCount = (k: MsgFilter) => (c ? (k === "all" ? (c.not_sent ?? 0) + (c.sent ?? 0) + (c.failed ?? 0) : c[k] ?? 0) : undefined);
+
+  const GROUPS: { key: ListGroup; label: string; n: number }[] = [
+    { key: "completed", label: "Completed", n: totals.total_completed },
+    { key: "incomplete", label: "Incomplete", n: totals.total_incomplete },
+    { key: "no_location", label: "No location", n: totals.no_location },
+  ];
 
   return (
     <section className="wx-sheet">
       <div className="wx-sheet-head">
         <span className="wx-num">01</span>
         <h2>
-          <CheckCircle2 size={16} style={{ verticalAlign: "-2px", marginRight: "6px", color: "#16a34a" }} />
-          Completed Registrations
+          <Users size={16} style={{ verticalAlign: "-2px", marginRight: "6px" }} />
+          Users &amp; WhatsApp Status
         </h2>
-        {c && (
-          <span className="wx-sheet-aside wx-aside">
-            {c.all.toLocaleString("en-IN")} completed · {c.reminded.toLocaleString("en-IN")} after our reminder
-          </span>
-        )}
+        <span className="wx-sheet-aside wx-aside">
+          {totals.total_completed.toLocaleString("en-IN")} completed · {totals.completed_after_reminder.toLocaleString("en-IN")} after our reminder
+        </span>
       </div>
 
-      <ErrorNote error={data.error || r?.error} />
+      <ErrorNote error={data.error || page?.error} />
 
       <div className="wwl-people-tools">
         <div className="wwl-people-row">
-          <div className="wwl-seg" role="tablist" aria-label="Completed audience">
-            {COMPLETED_AUDIENCES.map((a) => (
+          <div className="wwl-seg" role="tablist" aria-label="Which users">
+            {GROUPS.map((g) => (
+              <button key={g.key} type="button" className={group === g.key ? "on" : ""} onClick={() => setGroup(g.key)}>
+                {g.key === "completed" && <CheckCircle2 size={12} style={{ verticalAlign: "-1px", marginRight: "4px" }} />}
+                {g.key === "incomplete" && <Hourglass size={12} style={{ verticalAlign: "-1px", marginRight: "4px" }} />}
+                {g.key === "no_location" && <MapPinOff size={12} style={{ verticalAlign: "-1px", marginRight: "4px" }} />}
+                {g.label} ({g.n.toLocaleString("en-IN")})
+              </button>
+            ))}
+          </div>
+          <div className="wwl-seg" role="tablist" aria-label="Role">
+            {LIST_AUDIENCES.map((a) => (
               <button key={a.key} type="button" className={audience === a.key ? "on" : ""} onClick={() => setAudience(a.key)}>
                 {a.key === "helper" && <HandHeart size={12} style={{ verticalAlign: "-1px", marginRight: "4px" }} />}
                 {a.key === "customer" && <UserRoundPlus size={12} style={{ verticalAlign: "-1px", marginRight: "4px" }} />}
                 {a.label}
-                {c ? ` (${c[a.key].toLocaleString("en-IN")})` : ""}
               </button>
             ))}
           </div>
@@ -553,21 +595,24 @@ function CompletedUsersSection({ refreshKey }: { refreshKey: string | null }) {
             <input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Search name, phone, city, user id…" />
           </div>
         </div>
-        <div className="wwl-filters">
-          {COMPLETED_FILTERS.map((f) => (
-            <button key={f.key} type="button" className={reminded === f.key ? "on" : ""} onClick={() => setReminded(f.key)}>
-              {f.label} {c && <span>{c[f.count]}</span>}
-            </button>
-          ))}
+        <div className="wwl-filters" aria-label="WhatsApp message status">
+          {MSG_FILTERS.map((f) => {
+            const n = statusCount(f.key);
+            return (
+              <button key={f.key} type="button" className={status === f.key ? "on" : ""} onClick={() => setStatus(f.key)}>
+                {f.label} {n !== undefined && <span>{n.toLocaleString("en-IN")}</span>}
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      {!r ? (
+      {!res ? (
         <SkeletonRows rows={6} />
-      ) : r.loading && r.items.length === 0 ? (
+      ) : res.page.loading && res.page.items.length === 0 ? (
         <p className="wx-empty"><RefreshCw size={14} className="spin" /> Scanning ExtraHand registrations…</p>
-      ) : r.items.length === 0 ? (
-        <p className="wx-empty">No completed users match this filter.</p>
+      ) : res.page.items.length === 0 ? (
+        <p className="wx-empty">No users match this filter.</p>
       ) : (
         <>
           <div className="wwl-table-wrap">
@@ -576,47 +621,73 @@ function CompletedUsersSection({ refreshKey }: { refreshKey: string | null }) {
                 <tr>
                   <th>User</th>
                   <th>Role</th>
+                  {res.kind === "incomplete" && <th>What is missing</th>}
                   <th>City</th>
                   <th>Signed up</th>
-                  <th>Our reminder</th>
+                  <th>Our WhatsApp message</th>
                 </tr>
               </thead>
               <tbody>
-                {r.items.map((u) => (
-                  <tr key={`${u.audience}-${u.user_id}`}>
-                    <td>
-                      <b>{u.name || "Unnamed"}</b>
-                      <div className="wwl-person-meta"><Phone size={11} /> {fmtPhone(u.phone)}</div>
-                    </td>
-                    <td><AudienceBadge audience={u.audience} /></td>
-                    <td>{u.city || "—"}</td>
-                    <td style={{ whiteSpace: "nowrap" }}>{fmtWhen(u.registered_at)}</td>
-                    <td style={{ whiteSpace: "nowrap" }}>
-                      {u.reminder_status ? (
-                        <>
-                          <IncompleteStatusPill status={u.reminder_status} />
-                          <div style={{ color: "var(--muted)", fontSize: "11px" }}>{fmtWhen(u.reminder_sent_at)}</div>
-                        </>
-                      ) : (
-                        <span style={{ color: "var(--muted)", fontSize: "12px" }}>Not sent</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                {res.kind === "completed"
+                  ? res.page.items.map((u) => (
+                      <tr key={`${u.audience}-${u.user_id}`}>
+                        <td>
+                          <b>{u.name || "Unnamed"}</b>
+                          <div className="wwl-person-meta"><Phone size={11} /> {fmtPhone(u.phone)}</div>
+                        </td>
+                        <td><AudienceBadge audience={u.audience} /></td>
+                        <td>{u.city || "—"}</td>
+                        <td style={{ whiteSpace: "nowrap" }}>{fmtWhen(u.registered_at)}</td>
+                        <td style={{ whiteSpace: "nowrap" }}>
+                          <MsgCell status={u.reminder_status} at={u.reminder_sent_at} />
+                        </td>
+                      </tr>
+                    ))
+                  : res.page.items.map((u) => (
+                      <tr key={`${u.audience}-${u.user_id}`}>
+                        <td>
+                          <b>{u.name || "Unnamed"}</b>
+                          <div className="wwl-person-meta"><Phone size={11} /> {fmtPhone(u.phone)}</div>
+                        </td>
+                        <td><AudienceBadge audience={u.audience} /></td>
+                        <td>
+                          <div style={{ fontWeight: 600, fontSize: "12.5px" }}>{u.stage_label}</div>
+                          <small style={{ color: "var(--muted)", fontSize: "11px" }}>{u.missing.join(", ")}</small>
+                        </td>
+                        <td>{u.city || "No location"}</td>
+                        <td style={{ whiteSpace: "nowrap" }}>{fmtWhen(u.registered_at)}</td>
+                        <td style={{ whiteSpace: "nowrap" }}>
+                          <MsgCell status={u.msg_status} at={u.sent_at} />
+                          {u.error && <div style={{ color: "var(--danger)", fontSize: "11px", maxWidth: "200px", whiteSpace: "normal" }}>{u.error}</div>}
+                        </td>
+                      </tr>
+                    ))}
               </tbody>
             </table>
           </div>
           <div className="wwl-pager">
-            <span>Showing {offset + 1}–{Math.min(offset + r.items.length, r.total)} of {r.total.toLocaleString("en-IN")}</span>
-            <button type="button" className="wsm-page-btn" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - COMPLETED_LIMIT))}>
+            <span>Showing {offset + 1}–{Math.min(offset + res.page.items.length, res.page.total)} of {res.page.total.toLocaleString("en-IN")}</span>
+            <button type="button" className="wsm-page-btn" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - LIST_LIMIT))}>
               Previous
             </button>
-            <button type="button" className="wsm-page-btn" disabled={offset + r.items.length >= r.total} onClick={() => setOffset(offset + COMPLETED_LIMIT)}>
+            <button type="button" className="wsm-page-btn" disabled={offset + res.page.items.length >= res.page.total} onClick={() => setOffset(offset + LIST_LIMIT)}>
               Next
             </button>
           </div>
         </>
       )}
     </section>
+  );
+}
+
+/** Our reminder's WhatsApp status (Sent / Delivered / Read / Failed, or why nothing was sent) and when it went. */
+function MsgCell({ status, at }: { status: string | null; at: string | null }) {
+  if (!status) return <span className="wwl-chip wwl-t-off">Not sent</span>;
+  const sent = ["sent", "sending", "delivered", "read", "failed"].includes(status);
+  return (
+    <>
+      <IncompleteStatusPill status={status === "sending" ? "sent" : status} />
+      {sent && at && <div style={{ color: "var(--muted)", fontSize: "11px" }}>{fmtWhen(at)}</div>}
+    </>
   );
 }
