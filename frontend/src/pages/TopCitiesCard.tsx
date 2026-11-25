@@ -36,6 +36,31 @@ export function TopCitiesCard() {
     .filter((c) => c.name !== NO_CITY)
     .map((c) => ({ name: c.name, state: s.name, customers: c.customers, helpers: c.helpers, newC: c.new_customers, newH: c.new_helpers,
       actC: c.active_customers ?? 0, actH: c.active_helpers ?? 0 }))), [r]);
+  const noLocation = useMemo(() => {
+    const out: City = { name: "No location", state: "No city or location saved", customers: 0, helpers: 0, newC: 0, newH: 0, actC: 0, actH: 0 };
+    let noLocC = 0, noLocH = 0, noCityC = 0, noCityH = 0;
+    for (const s of r?.states ?? []) {
+      for (const c of s.cities) {
+        if (s.name === "Location not set") {
+          noLocC += c.customers;
+          noLocH += c.helpers;
+        } else if (c.name === NO_CITY) {
+          noCityC += c.customers;
+          noCityH += c.helpers;
+        } else {
+          continue;
+        }
+        out.customers += c.customers;
+        out.helpers += c.helpers;
+        out.newC += c.new_customers;
+        out.newH += c.new_helpers;
+        out.actC += c.active_customers ?? 0;
+        out.actH += c.active_helpers ?? 0;
+      }
+    }
+    const note = `Location not set: ${n(noLocC)} customers, ${n(noLocH)} helpers · City not set: ${n(noCityC)} customers, ${n(noCityH)} helpers`;
+    return { row: out, note };
+  }, [r]);
   const showActive = !!r?.active_known;
   const days = r?.active_days ?? 30;
 
@@ -46,7 +71,7 @@ export function TopCitiesCard() {
   const score = (c: City) => (sort === "customers" ? c.customers * 1e5 + c.helpers : sort === "helpers" ? c.helpers * 1e5 + c.customers
     : sort === "active" ? av(c) * 1e5 + c.customers + c.helpers : isNew ? c.newC + c.newH : c.customers + c.helpers);
   const top = [...cities].sort((a, b) => score(b) - score(a)).slice(0, TOP).filter((c) => score(c) > 0);
-  const max = Math.max(1, ...top.map((c) => Math.max(cv(c), hv(c), showActive && !isNew ? av(c) : 0)));
+  const max = Math.max(1, ...[noLocation.row, ...top].map((c) => Math.max(cv(c), hv(c), showActive && !isNew ? av(c) : 0)));
 
   const totals = cities.reduce((a, c) => ({ c: a.c + c.customers, h: a.h + c.helpers, nc: a.nc + c.newC, nh: a.nh + c.newH,
     ac: a.ac + c.actC, ah: a.ah + c.actH }), { c: 0, h: 0, nc: 0, nh: 0, ac: 0, ah: 0 });
@@ -67,6 +92,29 @@ export function TopCitiesCard() {
     if (noHelper.length) highlights.push({ icon: AlertTriangle, tone: "warn",
       text: <><b>{n(noHelper.length)} cities</b> have customers but no helper<small>{n(noHelper.reduce((s, c) => s + c.customers, 0))} customers there</small></> });
   }
+
+  const renderRow = (c: City, rank: number, delayIdx: number, note?: string) => (
+    <li key={rank === 0 ? "no-location" : `${c.state}|${c.name}`} title={note}>
+      <span className={`cw-rank-n ${rank > 0 && rank <= 3 ? "top" : ""}`}>{rank}</span>
+      <span className="rg-pair-name"><b>{c.name}</b><small>{c.state}</small></span>
+      <span className="rg-pair-bars">
+        <span className="rg-bar c" title={`${n(cv(c))} ${isNew ? "new " : ""}customers`}>
+          <motion.i initial={{ width: 0 }} animate={{ width: `${cv(c) ? Math.max(1.5, (cv(c) / max) * 100) : 0}%` }} transition={{ duration: 0.5, delay: delayIdx * 0.03 }} />
+          <b className="tabular">{isNew && cv(c) ? "+" : ""}{n(cv(c))}</b>
+        </span>
+        <span className="rg-bar h" title={`${n(hv(c))} ${isNew ? "new " : ""}helpers`}>
+          <motion.i initial={{ width: 0 }} animate={{ width: `${hv(c) ? Math.max(1.5, (hv(c) / max) * 100) : 0}%` }} transition={{ duration: 0.5, delay: delayIdx * 0.03 + 0.05 }} />
+          <b className="tabular">{isNew && hv(c) ? "+" : ""}{n(hv(c))}</b>
+        </span>
+        {showActive && !isNew && (
+          <span className="rg-bar a" title={`Active in the last ${days} days: ${n(c.actC)} customers booked, ${n(c.actH)} helpers got a Work`}>
+            <motion.i initial={{ width: 0 }} animate={{ width: `${av(c) ? Math.max(1.5, (av(c) / max) * 100) : 0}%` }} transition={{ duration: 0.5, delay: delayIdx * 0.03 + 0.1 }} />
+            <b className="tabular act">{n(av(c))} active <small>{n(c.actC)} customers · {n(c.actH)} helpers</small></b>
+          </span>
+        )}
+      </span>
+    </li>
+  );
 
   return (
     <section className="cw-page rg-page tc-card">
@@ -98,30 +146,12 @@ export function TopCitiesCard() {
               {isNew && <span>· {n(totals.nc)} new customers and {n(totals.nh)} new helpers in all</span>}
               {sort === "active" && <span>· {n(totals.ac)} active customers and {n(totals.ah)} active helpers in all</span>}
             </div>
-            {top.length === 0 ? <p className="cw-empty small">No new signups with a city this month yet.</p> : (
+            {top.length === 0 && cv(noLocation.row) === 0 && hv(noLocation.row) === 0 ? (
+              <p className="cw-empty small">No new signups with a city this month yet.</p>
+            ) : (
               <ol className="rg-pairs">
-                {top.map((c, i) => (
-                  <li key={`${c.state}|${c.name}`}>
-                    <span className={`cw-rank-n ${i < 3 ? "top" : ""}`}>{i + 1}</span>
-                    <span className="rg-pair-name"><b>{c.name}</b><small>{c.state}</small></span>
-                    <span className="rg-pair-bars">
-                      <span className="rg-bar c" title={`${n(cv(c))} ${isNew ? "new " : ""}customers`}>
-                        <motion.i initial={{ width: 0 }} animate={{ width: `${cv(c) ? Math.max(1.5, (cv(c) / max) * 100) : 0}%` }} transition={{ duration: 0.5, delay: i * 0.03 }} />
-                        <b className="tabular">{isNew && cv(c) ? "+" : ""}{n(cv(c))}</b>
-                      </span>
-                      <span className="rg-bar h" title={`${n(hv(c))} ${isNew ? "new " : ""}helpers`}>
-                        <motion.i initial={{ width: 0 }} animate={{ width: `${hv(c) ? Math.max(1.5, (hv(c) / max) * 100) : 0}%` }} transition={{ duration: 0.5, delay: i * 0.03 + 0.05 }} />
-                        <b className="tabular">{isNew && hv(c) ? "+" : ""}{n(hv(c))}</b>
-                      </span>
-                      {showActive && !isNew && (
-                        <span className="rg-bar a" title={`Active in the last ${days} days: ${n(c.actC)} customers booked, ${n(c.actH)} helpers got a Work`}>
-                          <motion.i initial={{ width: 0 }} animate={{ width: `${av(c) ? Math.max(1.5, (av(c) / max) * 100) : 0}%` }} transition={{ duration: 0.5, delay: i * 0.03 + 0.1 }} />
-                          <b className="tabular act">{n(av(c))} active <small>{n(c.actC)} customers · {n(c.actH)} helpers</small></b>
-                        </span>
-                      )}
-                    </span>
-                  </li>
-                ))}
+                {renderRow(noLocation.row, 0, 0, noLocation.note)}
+                {top.map((c, i) => renderRow(c, i + 1, i + 1))}
               </ol>
             )}
           </div>
