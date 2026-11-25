@@ -201,6 +201,15 @@ const AGENTS: Record<AgentKind, { title: string; subtitle: string; icon: LucideI
         ],
       },
       {
+        title: "Incomplete Register",
+        items: [
+          { to: "/engagement/incomplete/dashboard", label: "Dashboard", icon: LayoutDashboard },
+          { to: "/engagement/incomplete/users", label: "Helpers & Customers", icon: UsersRound },
+          { to: "/engagement/incomplete/history", label: "Message History", icon: Inbox },
+          { to: "/engagement/incomplete/commercials", label: "Commercials", icon: Receipt },
+        ],
+      },
+      {
         title: "WhatsApp Support",
         items: [
           { to: "/engagement/support/dashboard", label: "Dashboard", icon: LayoutDashboard },

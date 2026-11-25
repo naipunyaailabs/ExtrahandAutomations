@@ -152,6 +152,13 @@ def tick() -> None:
         except Exception:  # noqa: BLE001
             db.rollback()
             log.exception("cancellation follow-up step failed")
+        try:
+            from whatsapp.incomplete_reg import run_incomplete_reg
+
+            run_incomplete_reg(db)  # Incomplete Registration reminders (off by default, 5h wait)
+        except Exception:  # noqa: BLE001
+            db.rollback()
+            log.exception("incomplete registration step failed")
 
         r = runtime_settings(db)
         if r.emergency_stop_calls or not r.calling_agent_active:

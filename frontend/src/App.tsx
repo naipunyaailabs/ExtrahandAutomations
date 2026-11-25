@@ -34,6 +34,10 @@ import { WaAutomationCommercials, WaBulkCommercials } from "./pages/WaCommercial
 import { WaSentMessages } from "./pages/WaSentMessages";
 import { WaWelcomer, WaWelcomerCommercials } from "./pages/WaWelcomers";
 import { WaFeedback, WaFeedbackCommercials, WaFeedbackReplies, WaFeedbackTemplate } from "./pages/WaFeedback";
+import { IncompleteRegDashboard } from "./pages/IncompleteRegDashboard";
+import { IncompleteRegUsers } from "./pages/IncompleteRegUsers";
+import { IncompleteRegHistory } from "./pages/IncompleteRegHistory";
+import { IncompleteRegCommercials } from "./pages/IncompleteRegCommercials";
 import { AdCommercials } from "./pages/AdCommercials";
 import { TaskSeeding } from "./pages/TaskSeeding";
 import BulkCallingPage from "./pages/BulkCallingPage";
@@ -189,6 +193,11 @@ function AuthedApp() {
           <Route path="/engagement/welcomers/helper" element={<WaWelcomer audience="helper" />} />
           <Route path="/engagement/welcomers/customer" element={<WaWelcomer audience="customer" />} />
           <Route path="/engagement/welcomers/commercials" element={<WaWelcomerCommercials />} />
+          <Route path="/engagement/incomplete" element={<Navigate to="/engagement/incomplete/dashboard" replace />} />
+          <Route path="/engagement/incomplete/dashboard" element={<IncompleteRegDashboard />} />
+          <Route path="/engagement/incomplete/users" element={<IncompleteRegUsers />} />
+          <Route path="/engagement/incomplete/history" element={<IncompleteRegHistory />} />
+          <Route path="/engagement/incomplete/commercials" element={<IncompleteRegCommercials />} />
           <Route path="/feedback/reviews" element={<WaFeedback />} />
           <Route path="/feedback/template" element={<WaFeedbackTemplate />} />
           <Route path="/feedback/replies" element={<WaFeedbackReplies />} />

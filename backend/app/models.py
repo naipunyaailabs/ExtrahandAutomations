@@ -427,6 +427,30 @@ class WhatsAppWelcome(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
+class WhatsAppIncompleteReg(Base):
+    """One WhatsApp reminder per incomplete helper/customer signup (sent once after 5 hours if still incomplete)."""
+
+    __tablename__ = "whatsapp_incomplete_regs"
+    __table_args__ = (UniqueConstraint("audience", "user_id", name="uq_incomplete_reg_audience_user"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    audience: Mapped[str] = mapped_column(String(10), index=True)  # helper | customer
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    name: Mapped[str | None] = mapped_column(String(200))
+    phone: Mapped[str | None] = mapped_column(String(32), index=True)
+    phone_key: Mapped[str | None] = mapped_column(String(15), index=True)  # last 10 digits: 1 msg per person lifetime
+    stage: Mapped[str | None] = mapped_column(String(40))  # profile_pending | kyc_pending | role_pending | location_pending | name_pending
+    city: Mapped[str | None] = mapped_column(String(120))
+    registered_at: Mapped[datetime | None] = mapped_column(DateTime)
+    template: Mapped[str | None] = mapped_column(String(100))
+    status: Mapped[str] = mapped_column(String(16), default="sending", index=True)  # sending | sent | failed | simulated | no_phone | skipped
+    error: Mapped[str | None] = mapped_column(String(300))
+    provider_message_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    is_test: Mapped[bool] = mapped_column(Boolean, default=False)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
 class WhatsAppCancelFollowup(Base):
     """One WhatsApp follow-up per Work a customer cancelled (Cancellation Follow-up): the bilingual "what went
     wrong?" message with a form (Flow) for the reason, answered inside WhatsApp."""

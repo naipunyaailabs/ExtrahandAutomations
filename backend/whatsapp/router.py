@@ -917,3 +917,8 @@ router.include_router(_cancel_followup_router)  # /api/whatsapp/cancel-followup
 from .support.router import router as _support_router  # noqa: E402
 
 router.include_router(_support_router)
+
+# Incomplete Registration reminders: /api/whatsapp/incomplete-reg/...
+from .incomplete_reg import router as _incomplete_reg_router  # noqa: E402
+
+router.include_router(_incomplete_reg_router)

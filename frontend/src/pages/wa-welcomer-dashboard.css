@@ -82,12 +82,14 @@
 .wd-peak b { color: #ea580c; }
 .wd-foot { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 12px; color: var(--muted); }
 
+.wd-kpis.wd-kpis-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+
 @media (max-width: 1100px) {
-  .wd-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .wd-kpis, .wd-kpis.wd-kpis-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .wd-two { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 560px) {
-  .wd-kpis { grid-template-columns: minmax(0, 1fr); }
+  .wd-kpis, .wd-kpis.wd-kpis-5 { grid-template-columns: minmax(0, 1fr); }
   .wd-step { grid-template-columns: 90px 1fr 36px 34px; }
   .wd-cities li { grid-template-columns: 22px 90px 1fr 32px; }
 }

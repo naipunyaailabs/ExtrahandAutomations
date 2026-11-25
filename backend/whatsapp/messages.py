@@ -41,7 +41,7 @@ def _resolved(db: Session):
 @router.get("")
 def sent_messages(
     category: Literal["all", "utility", "marketing", "other"] = "all",
-    source: Literal["all", "automation", "bulk", "manual", "welcome"] = "all",
+    source: Literal["all", "automation", "bulk", "manual", "welcome", "incomplete_reg"] = "all",
     status: Literal["all", "sent", "delivered", "read", "failed", "simulated"] = "all",
     q: str = "",
     days: int = Query(30, ge=0, le=3650, description="0 = all time"),

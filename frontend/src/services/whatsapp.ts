@@ -38,6 +38,11 @@ import type {
   WsMessage,
   WsCase,
   WsTestReply,
+  WaIncompleteCompletedPage,
+  WaIncompleteDashboard,
+  WaIncompleteUsersPage,
+  WaIncompleteHistoryPage,
+  WaIncompleteCommercials,
   WaCancelFollowupSetup,
   WaFeedbackPage,
   WaFeedbackTab,
@@ -123,6 +128,33 @@ export function createWhatsAppService(
       ),
     checkWelcomersNow: () => post<Record<string, number>>("/api/whatsapp/welcomers/check-now"),
     welcomerCommercials: () => get<WaWelcomerCommercials>("/api/whatsapp/welcomer-commercials"),
+    incompleteRegDashboard: (refresh = false) =>
+      get<WaIncompleteDashboard>(`/api/whatsapp/incomplete-reg/dashboard${refresh ? "?refresh=true" : ""}`),
+    incompleteRegUsers: (params: { audience?: string; stage?: string; status?: string; q?: string; offset?: number; limit?: number; refresh?: boolean }) =>
+      get<WaIncompleteUsersPage>(
+        `/api/whatsapp/incomplete-reg/users?${new URLSearchParams(
+          Object.entries(params).filter(([, v]) => v !== undefined && v !== "" && v !== false).map(([k, v]) => [k, String(v)]),
+        )}`,
+      ),
+    incompleteRegCompleted: (params: { audience?: string; reminded?: string; q?: string; offset?: number; limit?: number }) =>
+      get<WaIncompleteCompletedPage>(
+        `/api/whatsapp/incomplete-reg/completed?${new URLSearchParams(
+          Object.entries(params).filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => [k, String(v)]),
+        )}`,
+      ),
+    incompleteRegHistory: (params: { audience?: string; status?: string; include_tests?: boolean; q?: string; offset?: number; limit?: number }) =>
+      get<WaIncompleteHistoryPage>(
+        `/api/whatsapp/incomplete-reg/history?${new URLSearchParams(
+          Object.entries(params).filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => [k, String(v)]),
+        )}`,
+      ),
+    incompleteRegCommercials: () => get<WaIncompleteCommercials>("/api/whatsapp/incomplete-reg/commercials"),
+    activateIncompleteReg: () => post<{ active: boolean; activated_at: string | null }>("/api/whatsapp/incomplete-reg/activate"),
+    deactivateIncompleteReg: () => post<{ active: boolean; activated_at: string | null }>("/api/whatsapp/incomplete-reg/deactivate"),
+    setupIncompleteRegTemplates: () => post<{ ok: boolean; templates: Record<string, { ok: boolean; already: boolean; status: string }> }>("/api/whatsapp/incomplete-reg/setup"),
+    checkIncompleteRegNow: () => post<Record<string, number>>("/api/whatsapp/incomplete-reg/check-now"),
+    testIncompleteReg: (phone: string, audience: WaAudience, name: string) =>
+      post<{ ok: boolean; status: string }>("/api/whatsapp/incomplete-reg/test", { phone, audience, name }),
     /** Messages the platform sent, split by Meta category (utility / marketing / other). */
     sentMessages: (params: Record<string, string | number>) =>
       get<WaSentMessagesPage>(

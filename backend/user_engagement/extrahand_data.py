@@ -362,6 +362,12 @@ def start_poller() -> None:
                 warm_registrations()
             except Exception as exc:  # noqa: BLE001
                 logger.warning("[User Engagement] Welcomer signups refresh failed: %s", exc)
+            try:
+                from whatsapp.incomplete_reg import warm_incomplete_registrations
+
+                warm_incomplete_registrations()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[User Engagement] Incomplete-reg refresh failed: %s", exc)
             time.sleep(POLL_SECONDS)
 
     threading.Thread(target=_loop, daemon=True, name="engagement-poller").start()

@@ -2323,3 +2323,164 @@ export interface WsTestReply {
   reply?: string; language?: string; intent?: string; action?: string; case_id?: number | null; used_ai?: boolean;
   llm_ms?: number | null; error?: string | null; skipped?: string; conversation_id?: number;
 }
+
+/* ------------------------------------------------------------------ Incomplete Registration Engagement */
+export interface WaIncompleteTemplateInfo {
+  name: string;
+  language: string;
+  status: string;
+  category: string;
+  rejected_reason?: string | null;
+  id?: string | null;
+  error?: string | null;
+  body: string;
+}
+
+export interface WaIncompleteDashboard {
+  active: boolean;
+  activated_at: string | null;
+  start_from: string | null;
+  wait_hours: number;
+  last_check: string | null;
+  fetched_at: string | null;
+  loading: boolean;
+  error: string | null;
+  counts: {
+    total_incomplete: number;
+    helper_incomplete: number;
+    customer_incomplete: number;
+    total_completed: number;
+    helper_completed: number;
+    customer_completed: number;
+    completed_after_reminder: number;
+    waiting_5h: number;
+    ready_to_send: number;
+    old_skipped: number;
+    no_phone: number;
+    sent: number;
+    delivered: number;
+    read: number;
+    failed: number;
+    simulated: number;
+  };
+  stages: { key: string; label: string; count: number }[];
+  templates: { helper: WaIncompleteTemplateInfo; customer: WaIncompleteTemplateInfo };
+  recent_tests: {
+    id: number;
+    audience: WaAudience;
+    name: string | null;
+    phone: string | null;
+    status: string;
+    error: string | null;
+    created_at: string | null;
+  }[];
+  daily: {
+    date: string;
+    helper_incomplete: number;
+    customer_incomplete: number;
+    sent: number;
+    read: number;
+  }[];
+}
+
+export interface WaIncompleteUserItem {
+  user_id: string;
+  audience: WaAudience;
+  name: string | null;
+  phone: string | null;
+  city: string | null;
+  stage: string;
+  stage_label: string;
+  missing: string[];
+  registered_at: string | null;
+  eligible_at: string | null;
+  remaining_seconds: number;
+  msg_status: "waiting_5h" | "ready" | "old_skipped" | "sent" | "delivered" | "read" | "failed" | "simulated" | "no_phone" | string;
+  sent_at: string | null;
+  error: string | null;
+}
+
+export interface WaIncompleteUsersPage {
+  counts: Record<string, number>;
+  total: number;
+  offset: number;
+  limit: number;
+  fetched_at: string | null;
+  loading: boolean;
+  error: string | null;
+  items: WaIncompleteUserItem[];
+}
+
+export interface WaIncompleteCompletedItem {
+  user_id: string;
+  audience: WaAudience;
+  name: string | null;
+  phone: string | null;
+  city: string | null;
+  registered_at: string | null;
+  reminded: boolean;
+  reminder_status: string | null;
+  reminder_sent_at: string | null;
+}
+
+export interface WaIncompleteCompletedPage {
+  counts: { all: number; helper: number; customer: number; reminded: number; organic: number };
+  total: number;
+  offset: number;
+  limit: number;
+  fetched_at: string | null;
+  loading: boolean;
+  error: string | null;
+  items: WaIncompleteCompletedItem[];
+}
+
+export interface WaIncompleteHistoryItem {
+  id: number;
+  audience: WaAudience;
+  user_id: string;
+  name: string | null;
+  phone: string | null;
+  stage: string | null;
+  stage_label: string;
+  city: string | null;
+  template: string | null;
+  status: string;
+  error: string | null;
+  is_test: boolean;
+  registered_at: string | null;
+  sent_at: string | null;
+  delivered_at: string | null;
+  read_at: string | null;
+}
+
+export interface WaIncompleteHistoryPage {
+  counts: { all: number; sent: number; delivered: number; read: number; failed: number; simulated: number; helper: number; customer: number };
+  total: number;
+  offset: number;
+  limit: number;
+  items: WaIncompleteHistoryItem[];
+  webhook_last_seen: string | null;
+  last_sent_at: string | null;
+}
+
+export interface WaIncompleteCommercialsFigures {
+  sent: number;
+  delivered: number;
+  read: number;
+  failed: number;
+  simulated: number;
+  cost: number;
+  cost_per_msg: number;
+  delivery_rate: number;
+  read_rate: number;
+}
+
+export interface WaIncompleteCommercials {
+  periods: Record<"today" | "week" | "month" | "all", {
+    total: WaIncompleteCommercialsFigures;
+    helper: WaIncompleteCommercialsFigures;
+    customer: WaIncompleteCommercialsFigures;
+  }>;
+  daily: { date: string; helper: number; customer: number; cost: number }[];
+  rate_marketing: number;
+}
