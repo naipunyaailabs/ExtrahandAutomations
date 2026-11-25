@@ -139,8 +139,8 @@ export function IncompleteRegDashboard() {
             <span className="wx-kicker"><Hourglass size={13} /> Customer Engagement · Incomplete Register</span>
             <h1>Incomplete Registration Dashboard</h1>
             <p className="wd-sub">
-              Detects Helpers &amp; Customers who stopped registration midway. When active, only people who sign up after activation
-              get 1 Telugu reminder, 5 hours after signup. Everyone who signed up before activation is ignored.
+              Detects Helpers &amp; Customers who stopped registration midway. When active, only registered helpers and customers who have not added their location, and who sign up after
+              activation, get 1 Telugu reminder 5 hours after signup. Everyone else is left out.
             </p>
           </div>
           <div className="wx-banner-tools">
@@ -226,7 +226,7 @@ export function IncompleteRegDashboard() {
               color="#d97706"
               label="New signups: Eligible / Waiting"
               value={d.counts.ready_to_send}
-              note={`${d.counts.waiting_5h} waiting in 5h window · ${d.counts.no_phone} no phone · ${d.counts.old_skipped.toLocaleString("en-IN")} old ignored`}
+              note={`${d.counts.waiting_5h} waiting in 5h window · ${d.counts.no_phone} no phone · ${d.counts.old_skipped.toLocaleString("en-IN")} old ignored · ${d.counts.not_targeted.toLocaleString("en-IN")} location added (not messaged)`}
             />
             <Kpi
               icon={Send}
@@ -427,14 +427,16 @@ export function IncompleteRegDashboard() {
                     />
                   </label>
                   <label style={{ display: "grid", gap: "4px", fontSize: "12px", color: "var(--muted)" }}>
-                    Customer name (for Customer template)
+                    Customer name (shown in the Customer greeting)
                     <input
                       value={testName}
                       onChange={(e) => setTestName(e.target.value)}
-                      placeholder="Priya"
-                      disabled={testAudience === "helper"}
-                      style={{ height: "36px", padding: "0 10px", borderRadius: "9px", border: "1px solid var(--wx-rule)", background: "var(--surface)", color: "var(--text)", opacity: testAudience === "helper" ? 0.55 : 1 }}
+                      placeholder="Type a name, e.g. Priya"
+                      style={{ height: "36px", padding: "0 10px", borderRadius: "9px", border: "1px solid var(--wx-rule)", background: "var(--surface)", color: "var(--text)" }}
                     />
+                    {testAudience === "helper" && (
+                      <small style={{ fontSize: "11px" }}>The Helper template has no name in it; switch to Customer Template to use this name.</small>
+                    )}
                   </label>
                 </div>
                 <button type="submit" className="wwl-submit" style={{ justifySelf: "start" }} disabled={!testPhone.trim() || busy === "test"}>

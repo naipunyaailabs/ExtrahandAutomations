@@ -75,7 +75,8 @@ def test_starts_inactive_and_has_exact_telugu_templates(client, db, fake):
     d = client.get("/api/whatsapp/incomplete-reg/dashboard").json()
     assert d["active"] is False
     assert d["wait_hours"] == 5
-    assert "మీ Helper Registration ఇంకా Pending లో ఉంది." in d["templates"]["helper"]["body"]
+    assert "ExtraHand App లో మీ *Helper Registration ఇంకా Pending* లో ఉంది." in d["templates"]["helper"]["body"]
+    assert "📦 Grocery / Medicine Delivery" in d["templates"]["helper"]["body"]
     assert "సహాయం చేయండి, రోజూ సంపాదించండి" in d["templates"]["helper"]["body"]
     assert "మీ Customer Registration ఇంకా Pending లో ఉంది." in d["templates"]["customer"]["body"]
     assert "మీకు దగ్గరలోనే నమ్మకమైన సహాయం" in d["templates"]["customer"]["body"]
@@ -111,6 +112,28 @@ def test_users_who_signed_up_before_activation_are_ignored(client, db, fake):
 
     # Running again never picks up the old users
     assert client.post("/api/whatsapp/incomplete-reg/check-now").json()["sent"] == 0
+
+
+def test_only_users_without_location_get_a_reminder(client, db, fake):
+    users, sent, _ = fake
+    loc = {"addressDetails": {"city": "Hyderabad", "state": "Telangana"}}
+    users.append(_user("h_noloc", "partner", 8, name="No Loc Helper", phone="9000000041",
+                       partnerProfile={"status": "not_applied", "onboardingCompleted": True, "categories": ["x"], "workAreas": ["y"]}))
+    users.append(_user("h_kyc", "partner", 8, name="Kyc Helper", phone="9000000042", isAadhaarVerified=False, location=loc,
+                       partnerProfile={"status": "rejected", "onboardingCompleted": True, "categories": ["x"], "workAreas": ["y"]}))
+    users.append(_user("h_cats", "partner", 8, name="Cats Helper", phone="9000000043", location=loc,
+                       partnerProfile={"status": "not_applied", "onboardingCompleted": True, "categories": [], "workAreas": []}))
+    users.append(_user("c_noloc", "customer", 8, name="Sita Devi", phone="9000000044"))
+    users.append(_user("c_noname", "customer", 8, name="User", phone="9000000045", location=loc))
+    users.append(_user("c_role", "unknown", 8, name="Kiran", phone="9000000046"))
+
+    _activated_hours_ago(client, db, 11)
+    res = client.post("/api/whatsapp/incomplete-reg/check-now").json()
+    assert sorted(s["to"] for s in sent) == ["+919000000041", "+919000000044"]
+    assert res["sent"] == 2
+    statuses = {x["name"]: x["msg_status"] for x in client.get("/api/whatsapp/incomplete-reg/users").json()["items"]}
+    assert statuses["Kyc Helper"] == statuses["Cats Helper"] == statuses["User"] == statuses["Kiran"] == "not_targeted"
+    assert client.get("/api/whatsapp/incomplete-reg/dashboard").json()["counts"]["not_targeted"] == 4
 
 
 def test_detection_and_5_hour_rule_and_single_send(client, db, fake):
@@ -150,20 +173,22 @@ def test_detection_and_5_hour_rule_and_single_send(client, db, fake):
     assert client.get("/api/whatsapp/incomplete-reg/dashboard").json()["active"] is True
     u_resp = client.get("/api/whatsapp/incomplete-reg/users", params={"refresh": True}).json()
     assert u_resp["counts"]["all"] == 6  # h_old, h_kyc, h_new, c_noloc, c_unk, c_new
-    assert u_resp["counts"]["ready"] == 4
+    # Only users with no location are targeted: h_kyc (location set, KYC pending) and c_unk (role not chosen) are not
+    assert u_resp["counts"]["ready"] == 2
+    assert u_resp["counts"]["not_targeted"] == 2
     assert u_resp["counts"]["waiting_5h"] == 2
     res = client.post("/api/whatsapp/incomplete-reg/check-now").json()
-    assert res["sent"] == 4 and res["helper"] == 2 and res["customer"] == 2
+    assert res["sent"] == 2 and res["helper"] == 1 and res["customer"] == 1
 
     sent_phones = {s["to"] for s in sent}
-    assert sent_phones == {"+919000000011", "+919000000012", "+919000000021", "+919000000022"}
+    assert sent_phones == {"+919000000011", "+919000000021"}
     # Customer template fills first name
     cust_sends = [s for s in sent if s["template"] == "extrahand_customer_reg_pending"]
-    assert {s["variables"]["1"] for s in cust_sends} == {"Priya", "Kiran"}
+    assert {s["variables"]["1"] for s in cust_sends} == {"Priya"}
 
     # Re-running never sends twice to any user
     res2 = client.post("/api/whatsapp/incomplete-reg/check-now").json()
-    assert res2["sent"] == 0 and len(sent) == 4
+    assert res2["sent"] == 0 and len(sent) == 2
 
     # Suppose c_new crosses 5 hours AND stayed incomplete, while h_new completed registration
     for u in users:
@@ -181,7 +206,7 @@ def test_detection_and_5_hour_rule_and_single_send(client, db, fake):
     users.append(_user("c_dup_phone", "customer", 10, name="Dup", phone="9000000021"))
     res4 = client.post("/api/whatsapp/incomplete-reg/check-now").json()
     assert res4["sent"] == 0
-    assert db.query(WhatsAppIncompleteReg).count() == 5
+    assert db.query(WhatsAppIncompleteReg).count() == 3
 
 
 def test_dashboard_shows_completed_users(client, db, fake):

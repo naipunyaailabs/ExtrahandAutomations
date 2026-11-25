@@ -28,6 +28,7 @@ const STATUSES = [
   { key: "waiting_5h", label: "Waiting (5h)" },
   { key: "ready", label: "Ready (>5h)" },
   { key: "old_skipped", label: "Before activation (ignored)" },
+  { key: "not_targeted", label: "Location added (not messaged)" },
   { key: "sent", label: "Sent" },
   { key: "read", label: "Read" },
   { key: "failed", label: "Failed" },
@@ -76,7 +77,7 @@ export function IncompleteRegUsers() {
             <span className="wx-kicker"><Users size={13} /> Customer Engagement · Incomplete Register</span>
             <h1>Incomplete Helpers &amp; Customers</h1>
             <p className="wwl-sub">
-              Every real Helper and Customer who stopped registration midway. Only people who sign up after the automation is activated get a reminder, 5 hours after signup; older signups are ignored.
+              Every real Helper and Customer who stopped registration midway. Reminders go only to registered helpers and customers who have not added their location, who signed up after the automation was activated, 5 hours after signup. Everyone else is left out.
             </p>
           </div>
           <div className="wx-banner-tools">

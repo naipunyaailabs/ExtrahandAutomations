@@ -45,6 +45,7 @@ export const MSG_STATUS_LOOK: Record<string, { label: string; tone: string }> = 
   waiting_5h: { label: "Waiting (5h)", tone: "warn" },
   ready: { label: "Ready (>5h)", tone: "reg" },
   old_skipped: { label: "Before activation · ignored", tone: "off" },
+  not_targeted: { label: "Location added · not messaged", tone: "off" },
   sent: { label: "Sent", tone: "sent" },
   delivered: { label: "Delivered", tone: "delivered" },
   read: { label: "Read", tone: "read" },

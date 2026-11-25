@@ -3,6 +3,8 @@
 Rules (product spec):
 - Starts INACTIVE (stored in AppSetting under KEY = "whatsapp_incomplete_reg").
 - Wait period: WAIT_HOURS = 5 hours after signup (`createdAt`).
+  * Only registered helpers and customers who have NOT added their location are messaged ("not_targeted" for
+    everyone else: KYC pending, role not chosen, only the name missing, ...).
   * Only users who sign up AFTER the moment the automation is activated are messaged. Everyone who signed up
     before activation is ignored ("old_skipped"), even if still incomplete. Re-activating after a pause starts
     counting again from the new activation time.
@@ -57,10 +59,19 @@ TEMPLATES: dict[str, dict[str, Any]] = {
         "example": None,
         "body": (
             "నమస్కారం! 🙏\n\n"
-            "మీ Helper Registration ఇంకా Pending లో ఉంది.\n\n"
+            "ExtraHand App లో మీ *Helper Registration ఇంకా Pending* లో ఉంది.\n\n"
             "దయచేసి ఇప్పుడే మీ Registration పూర్తి చేసుకోండి.\n\n"
-            "మీ తోటి Helpers ఇప్పటికే Registration పూర్తి చేసుకుని ExtraHand ద్వారా సంపాదిస్తున్నారు. "
-            "మీరు కూడా ఆలస్యం చేయకుండా Registration పూర్తి చేసుకుని సంపాదించడం ప్రారంభించండి! 💰\n\n"
+            "మీ చుట్టుపక్కల ఉన్న Customers ఇప్పటికే ExtraHand ద్వారా వివిధ సేవలను బుక్ చేసుకుంటున్నారు. "
+            "మీరు కూడా ExtraHand లో Helper గా Registration పూర్తి చేసుకుని, మీకు నచ్చిన పనులను స్వీకరించి "
+            "*రోజూ సంపాదించడం ప్రారంభించండి!* 💰\n\n"
+            "🧹 Cleaning\n"
+            "⚡ Electrician\n"
+            "🔧 Plumber\n"
+            "❄️ AC Repair\n"
+            "🚗 Driver\n"
+            "📦 Grocery / Medicine Delivery\n"
+            "➕ ఇంకా ఎన్నో సేవలు!\n\n"
+            "*ఆలస్యం చేయకుండా మీ Registration పూర్తి చేసుకోండి.*\n\n"
             "*ExtraHand – సహాయం చేయండి, రోజూ సంపాదించండి!*"
         ),
     },
@@ -72,15 +83,15 @@ TEMPLATES: dict[str, dict[str, Any]] = {
         "example": "Priya",
         "body": (
             "నమస్కారం {{1}} గారు! 🙏\n\n"
-            "మీ Customer Registration ఇంకా Pending లో ఉంది.\n\n"
+            "ExtraHand app లో Customer గా మీ Customer Registration ఇంకా Pending లో ఉంది.\n\n"
             "దయచేసి ఇప్పుడే మీ Registration పూర్తి చేసుకోండి.\n\n"
-            "మీ చుట్టుపక్కల వారు కూడా ExtraHand ద్వారా తక్కువ ధరలో, తక్కువ సమయంలో తమకు కావాల్సిన ఈ సేవలను బుక్ చేసుకుంటున్నారు:\n\n"
+            "మీ చుట్టుపక్కల 1000+ Customers ExtraHand ద్వారా తక్కువ ధరలో, తక్కువ సమయంలో తమకు కావాల్సిన ఈ సేవలను బుక్ చేసుకుంటున్నారు:\n\n"
             "🧹 Cleaning\n"
             "⚡ Electrician\n"
             "🔧 Plumber\n"
             "❄️ AC Repair\n"
             "🚗 Driver\n"
-            "📦 Delivery Boys\n"
+            "📦 Grocery/Medicine Delivery Boys\n"
             "➕ ఇంకా ఎన్నో సేవలు!\n\n"
             "మీరు కూడా ఇప్పుడే Registration పూర్తి చేసుకుని, సులభంగా మరియు తక్కువ ధరలో సేవలను పొందండి! 😊\n\n"
             "*ExtraHand – మీకు దగ్గరలోనే నమ్మకమైన సహాయం!*"
@@ -117,6 +128,12 @@ def _state(db: Session) -> dict[str, Any]:
         "active": bool(data.get("active")),
         "activated_at": data.get("activated_at"),
     }
+
+
+def _targeted(u: dict[str, Any]) -> bool:
+    """Reminders go only to registered helpers and customers who have not added their location.
+    Everyone else who is incomplete (KYC pending, role not chosen, only the name missing, ...) is left out."""
+    return "Location" in (u.get("missing") or []) and u.get("stage") != "role_pending"
 
 
 def _start_from(state: dict[str, Any]) -> datetime:
@@ -578,6 +595,8 @@ def run_incomplete_reg(
         aud = u["audience"]
         if aud not in allowed:
             continue
+        if not _targeted(u):
+            continue  # location already set (or role not chosen) -> not in this campaign
         if u["registered_at"] < start_from:
             continue  # signed up before activation -> old user, ignored
         if u["registered_at"] > cutoff:
@@ -688,6 +707,7 @@ async def incomplete_dashboard(refresh: bool = False, db: Session = Depends(get_
         "waiting_5h": 0,
         "ready_to_send": 0,
         "old_skipped": 0,
+        "not_targeted": 0,
         "no_phone": 0,
         "sent": 0,
         "delivered": 0,
@@ -704,7 +724,9 @@ async def incomplete_dashboard(refresh: bool = False, db: Session = Depends(get_
         pkey = _phone_key(u.get("phone"))
         if r:
             continue
-        if u["registered_at"] < start_from:
+        if not _targeted(u):
+            counts["not_targeted"] += 1
+        elif u["registered_at"] < start_from:
             counts["old_skipped"] += 1
         elif not u["has_phone"]:
             counts["no_phone"] += 1
@@ -809,7 +831,7 @@ def incomplete_users(
     items: list[dict[str, Any]] = []
     counts = {
         "all": 0, "helper": 0, "customer": 0,
-        "waiting_5h": 0, "ready": 0, "old_skipped": 0, "sent": 0, "delivered": 0, "read": 0, "failed": 0,
+        "waiting_5h": 0, "ready": 0, "old_skipped": 0, "not_targeted": 0, "sent": 0, "delivered": 0, "read": 0, "failed": 0,
         "simulated": 0, "no_phone": 0,
     }
 
@@ -827,6 +849,8 @@ def incomplete_users(
         if r:
             st = _delivery(r, ledger)
             msg_status = "sent" if st == "sending" else st
+        elif not _targeted(u):
+            msg_status = "not_targeted"
         elif u["registered_at"] < start_from:
             msg_status = "old_skipped"
         elif not u["has_phone"]:

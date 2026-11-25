@@ -2356,6 +2356,7 @@ export interface WaIncompleteDashboard {
     waiting_5h: number;
     ready_to_send: number;
     old_skipped: number;
+    not_targeted: number;
     no_phone: number;
     sent: number;
     delivered: number;
@@ -2395,7 +2396,7 @@ export interface WaIncompleteUserItem {
   registered_at: string | null;
   eligible_at: string | null;
   remaining_seconds: number;
-  msg_status: "waiting_5h" | "ready" | "old_skipped" | "sent" | "delivered" | "read" | "failed" | "simulated" | "no_phone" | string;
+  msg_status: "waiting_5h" | "ready" | "old_skipped" | "not_targeted" | "sent" | "delivered" | "read" | "failed" | "simulated" | "no_phone" | string;
   sent_at: string | null;
   error: string | null;
 }
