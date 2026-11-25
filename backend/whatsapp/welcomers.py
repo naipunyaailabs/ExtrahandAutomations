@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
@@ -286,8 +287,9 @@ def welcomers_dashboard(refresh: bool = False, db: Session = Depends(get_db)) ->
             out.append("month")
         return out
 
+    regs = _all_registrations(force=refresh)
     for a in AUDIENCES:
-        reg = _registrations(a, force=refresh)
+        reg = regs[a]
         if reg.get("error"):
             errors.append(f"{a}: {reg['error']}")
         outcome, _ = _outcomes(db, a)
@@ -538,11 +540,21 @@ def _refresh_in_background(audience: str) -> None:
 
 def warm_registrations() -> None:
     """Reads every audience's signups (called by the engagement poller at start and every 5 minutes)."""
-    for audience in AUDIENCES:
+    def one(audience: str) -> None:
         try:
             _read_registrations(audience)
         except Exception as exc:  # noqa: BLE001
             log.warning("Welcomer history %s: warm-up read failed: %s", audience, exc)
+
+    with ThreadPoolExecutor(max_workers=len(AUDIENCES)) as pool:
+        list(pool.map(one, AUDIENCES))
+
+
+def _all_registrations(force: bool = False) -> dict[str, dict[str, Any]]:
+    """Every audience's signups. Audiences that must be read from ExtraHand (no saved copy yet, or Refresh) are read
+    at the same time, so a cold dashboard waits for the slowest audience instead of all of them in a row."""
+    with ThreadPoolExecutor(max_workers=len(AUDIENCES)) as pool:
+        return dict(zip(AUDIENCES, pool.map(lambda a: _registrations(a, force=force), AUDIENCES)))
 
 
 def _read_registrations(audience: str) -> dict[str, Any]:

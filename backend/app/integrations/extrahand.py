@@ -36,6 +36,7 @@ class ExtraHandSource(Protocol):
 class LiveExtraHandClient:
     mode = "live"
     page_size = 50
+    PAGE_WAVE = 8  # pages read at the same time by list_users_since
 
     def __init__(self) -> None:
         self.s = get_settings()
@@ -139,14 +140,25 @@ class LiveExtraHandClient:
     def list_users_since(self, role: str, since_iso: str, max_pages: int = 60) -> list[dict]:
         """Users of a role newest first, reading pages only until a user registered before `since_iso`
         (ISO-8601 UTC, compared as text like ExtraHand's createdAt)."""
-        out: list[dict] = []
-        for page in range(1, max_pages + 1):
+        # ExtraHand serves at most 50 users per page (~0.65 s each), so pages are read in parallel waves: a month of
+        # customers (~50 pages) takes ~5 s instead of ~35 s one page at a time.
+        from concurrent.futures import ThreadPoolExecutor
+
+        def read(page: int) -> tuple[int, dict, list[dict]]:
             resp = self._main("GET", "/users", params={"role": role, "page": page, "limit": self.page_size})
-            items = extract_list(resp)
-            out.extend(items)
-            created = [str(u.get("createdAt") or "") for u in items if isinstance(u, dict)]
-            if not items or (created and min(created) < since_iso) or not has_next_page(resp, page, len(items), self.page_size):
-                break
+            return page, resp, extract_list(resp)
+
+        out: list[dict] = []
+        page = 1
+        with ThreadPoolExecutor(max_workers=self.PAGE_WAVE) as pool:
+            while page <= max_pages:
+                wave = list(pool.map(read, range(page, min(page + self.PAGE_WAVE, max_pages + 1))))
+                for p, resp, items in wave:  # in page order, stopping exactly where the one-by-one read stopped
+                    out.extend(items)
+                    created = [str(u.get("createdAt") or "") for u in items if isinstance(u, dict)]
+                    if not items or (created and min(created) < since_iso) or not has_next_page(resp, p, len(items), self.page_size):
+                        return out
+                page += len(wave)
         return out
 
     def search_helpers(self, q: str) -> list[dict]:
@@ -229,6 +241,15 @@ class ResilientExtraHandSource:
 
     def list_users(self, role: str, max_pages: int = 10) -> list[dict]:
         return self._execute("list_users", lambda: self.live.list_users(role, max_pages), lambda: self.mock.list_users(role, max_pages))
+
+    def list_users_since(self, role: str, since_iso: str, max_pages: int = 60) -> list[dict]:
+        # Without this pass-through, callers that look for list_users_since fell back to a full 60-page list_users
+        # read (~45 s per role instead of a few seconds).
+        return self._execute(
+            "list_users_since",
+            lambda: self.live.list_users_since(role, since_iso, max_pages),
+            lambda: self.mock.list_users(role, max_pages),
+        )
 
     def search_helpers(self, q: str) -> list[dict]:
         return self._execute("search_helpers", lambda: self.live.search_helpers(q), lambda: self.mock.search_helpers(q))
