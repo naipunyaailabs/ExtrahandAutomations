@@ -139,6 +139,6 @@ def test_every_table_is_created_by_python_on_an_empty_database(tmp_path, monkeyp
     monkeypatch.setattr(ptables, "_SessionLocal", ptables._SessionLocal)
     created = set(appdb.create_all_tables())
     expected = set(Base.metadata.tables) | set(mdb.metadata.tables) | set(ptables.PricingBase.metadata.tables)
-    assert len(expected) == 40 and expected <= created
+    assert len(expected) == 41 and expected <= created
     assert set(appdb.create_all_tables()) == created  # running it again changes nothing
     assert not (DEPLOY.parent / "backend" / "database" / "schema.sql").exists()
